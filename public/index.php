@@ -26,7 +26,7 @@ echo <<<HTML
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Dockup · Boards</title>
-<link rel="stylesheet" href="{$base}/assets/style.css">
+<link rel="stylesheet" href="{$base}/assets/style.css?v=20260816">
 <link rel="icon" href="data:,">
 </head>
 <body>
@@ -238,7 +238,7 @@ echo <<<HTML
 
 </div>
 
-<script src="{$base}/assets/app.js"></script>
+<script src="{$base}/assets/app.js?v=20260816"></script>
 </body>
 </html>
 HTML;

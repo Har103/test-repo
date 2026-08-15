@@ -568,6 +568,7 @@ $('#board')?.addEventListener('pointerdown', (e) => {
   dragStartY = e.clientY;
   dragRect = el.getBoundingClientRect();
   e.preventDefault();
+  try { el.setPointerCapture(e.pointerId); } catch { /* non-pointer-capable input */ }
   window.addEventListener('pointermove', onColumnPointerMove);
   window.addEventListener('pointerup', onColumnPointerUp);
   window.addEventListener('pointercancel', onColumnPointerUp);

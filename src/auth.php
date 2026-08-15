@@ -110,6 +110,14 @@ function auth_login(string $username, string $password): ?array
 function auth_login_session(array $user): void
 {
     session_start_app();
+    // Kill any legacy dockup_session cookie set at the app path (older
+    // builds defaulted the cookie path to the request path). Per RFC 6265
+    // the longer path wins, so a stale /dockerup/public cookie would shadow
+    // the regenerated '/'-path cookie and log the user out on the very
+    // next request.
+    setcookie('dockup_session', '', time() - 86400, app_base());
+    setcookie('dockup_session', '', time() - 86400, app_base() . '/');
+    setcookie('dockup_session', '', time() - 86400, '/');
     session_regenerate_id(true);
     $_SESSION['user_id'] = $user['id'];
     $_SESSION['username'] = $user['username'];

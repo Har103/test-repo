@@ -284,6 +284,7 @@ body.col-dragging { cursor: grabbing; user-select: none; }
   flex-direction: column;
   max-height: calc(100vh - 200px);
   border: 2px solid transparent;
+  touch-action: none;
 }
 
 .column.dragging-col { opacity: .4; cursor: grabbing; }
