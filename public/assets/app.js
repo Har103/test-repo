@@ -81,16 +81,20 @@ const WsTransport = {
   wsUrl: null,
   clients: null,
   statusTimer: null,
+  closed: false,
 
   connect(onEvent) {
+    this.closed = false;
     Board.health().then((h) => {
+      if (this.closed) return;
       this.wsUrl = h.wsUrl;
       this.open(onEvent);
     }).catch(() => {
-      setConnState(false, `${this.name} · ws server unreachable`);
+      if (!this.closed) setConnState(false, `${this.name} · ws server unreachable`);
     });
   },
   open(onEvent) {
+    if (this.closed) return;
     this.ws = new WebSocket(this.wsUrl);
     this.ws.onopen = () => {
       setConnState(true, `${this.name} · connected`);
@@ -133,6 +137,7 @@ const WsTransport = {
     el.textContent = `· ${this.clients} client${this.clients === 1 ? '' : 's'}`;
   },
   close() {
+    this.closed = true;
     if (this.statusTimer) clearInterval(this.statusTimer);
     if (this.ws) { this.ws.onclose = null; this.ws.close(); this.ws = null; }
   },
@@ -418,13 +423,6 @@ $('#btn-apply-settings')?.addEventListener('click', () => {
 
 $('#btn-settings')?.addEventListener('click', openSettings);
 
-/* ----------------------- Connection status ------------------------ */
-
-function setConnState(ok, label) {
-  $('#conn-dot').className = 'dot ' + (ok ? 'ok' : 'bad');
-  $('#conn-label').textContent = label;
-}
-
 /* --------------------------- Feed --------------------------------- */
 
 let feedOpen = false;
@@ -463,12 +461,32 @@ async function startLive() {
     feedEvent(ev);
   };
 
-  if (Transport.current === Transport.ws) {
-    live = WsTransport;
-  } else {
-    live = SseTransport;
-  }
+  live = Transport.current === Transport.ws ? WsTransport : SseTransport;
   live.connect(onEvent);
+
+  // Watchdog: if the transport never opens, say so instead of hanging.
+  setTimeout(() => {
+    if (live && !transportOpened) {
+      setConnState(false, live.name === 'WebSocket'
+        ? 'WebSocket unreachable — is board_ws running?'
+        : 'SSE not responding');
+    }
+  }, 6000);
+}
+
+let transportOpened = false;
+
+function setConnState(ok, label) {
+  transportOpened = transportOpened || ok;
+  $('#conn-dot').className = 'dot ' + (ok ? 'ok' : 'bad');
+  $('#conn-label').textContent = label;
+}
+
+function showBanner(msg) {
+  const b = $('#banner');
+  if (!b) return;
+  b.textContent = msg;
+  b.classList.remove('hidden');
 }
 
 async function boot() {
@@ -483,19 +501,22 @@ async function boot() {
     if (confirm('Replace the board with demo data?')) await Board.seed();
   });
 
-  const res = await Board.get();
-  State.columns = res.columns;
+  try {
+    const res = await Board.get();
+    State.columns = res.columns;
+  } catch (e) {
+    showBanner(`Board failed to load (${e.message}). Is PHP serving /api and is MariaDB running?`);
+  }
   renderBoard();
   startLive();
 
-  // Drain events that happened while this tab was loading.
-  const es = new EventSource(`${API_BASE}/api/events`);
-  es.addEventListener('message', (e) => {
-    if (Number(e.lastEventId) > State.lastEventId) {
-      applyEvent(JSON.parse(e.data));
-    }
-    es.close();
-  });
+  // Warn when served by the single-threaded built-in PHP server: SSE
+  // would block every other request there. Use Apache (or the WS transport).
+  const h = await Board.health().catch(() => null);
+  if (h && /development server/i.test(h.server || '')) {
+    showBanner('You are on the single-threaded `php -S` server — SSE will block requests. ' +
+      'Use Apache, or switch to the WebSocket transport in Settings.');
+  }
 }
 
 document.addEventListener('DOMContentLoaded', boot);

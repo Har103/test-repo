@@ -25,11 +25,23 @@ function api_dispatch(): void
     // GET /api/health
     if ($method === 'GET' && $seg === ['api', 'health']) {
         $ws = @fsockopen(config()['ws']['host'], config()['ws']['port'], $ec, $es, 0.4);
+
+        // Derive the WS address from the request host so the browser
+        // reaches the Rust server from anywhere (localhost, LAN IP,
+        // or a real domain like app.dockup.ai), not just 127.0.0.1.
+        $host = $_SERVER['HTTP_HOST'] ?? null;
+        if ($host !== null) {
+            $parsed = parse_url('http://' . $host);
+            $host = $parsed['host'] ?? config()['ws']['host'];
+        }
+        $wsPort = config()['ws']['port'];
+
         send_json([
-            'ok'    => true,
-            'time'  => date(DATE_ATOM),
-            'ws'    => $ws ? 'up' : 'down',
-            'wsUrl' => 'ws://' . config()['ws']['host'] . ':' . config()['ws']['port'] . '/',
+            'ok'     => true,
+            'time'   => date(DATE_ATOM),
+            'ws'     => $ws ? 'up' : 'down',
+            'wsUrl'  => sprintf('ws://%s:%d/', $host ?? config()['ws']['host'], $wsPort),
+            'server' => $_SERVER['SERVER_SOFTWARE'] ?? 'unknown',
         ]);
         if ($ws) { fclose($ws); }
     }

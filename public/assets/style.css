@@ -94,6 +94,20 @@ body {
 
 .clients { color: var(--text); }
 
+/* ----------------------------- banner ---------------------------- */
+
+.banner {
+  margin: 10px 20px 0;
+  padding: 10px 14px;
+  border: 1px solid var(--amber);
+  border-radius: 10px;
+  background: rgba(245, 158, 11, .1);
+  color: #fde68a;
+  font-size: 13px;
+}
+
+.banner.hidden { display: none; }
+
 /* ----------------------------- buttons --------------------------- */
 
 .btn {

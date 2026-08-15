@@ -92,8 +92,9 @@ php -S 127.0.0.1:8080 -t public public/router.php
 ```
 
 > ⚠️ SSE on `php -S` (built-in server) will block other requests because
-> it is single-threaded. For the SSE transport use Apache / php-fpm.
-> The WebSocket transport works fine anywhere.
+> it is single-threaded — the page will hang. Use **Apache** (or the
+> WebSocket transport, which works fine anywhere). The app shows a warning
+> banner when it detects the built-in server.
 
 Then open the board, open a **second tab**, and watch it sync.
 

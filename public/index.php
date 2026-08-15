@@ -47,6 +47,8 @@ echo <<<HTML
     </div>
   </header>
 
+  <div id="banner" class="banner hidden"></div>
+
   <main id="board" class="board" aria-live="polite">
     <div id="board-empty" class="board-empty">
       <p>No columns yet.</p>
