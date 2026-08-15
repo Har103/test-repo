@@ -418,7 +418,6 @@ function renderBoard() {
       el.className = 'column';
       el.id = `col-${col.id}`;
       el.dataset.col = `col-${col.id}`;
-      el.draggable = true;
       el.innerHTML = `
         <div class="col-head">
           <span class="col-grip">⋮⋮</span>
@@ -552,62 +551,91 @@ function bindColumnEvents(el) {
   body.addEventListener('dragleave', () => body.classList.remove('drop-tail'));
 }
 
-// column drag reorder
-$('#board')?.addEventListener('dragstart', (e) => {
-  if (e.target.classList.contains('column')) {
-    dragging = true;
-    dragColumn = e.target.dataset.columnId;
-    dragColumnEl = e.target;
-    requestAnimationFrame(() => e.target.classList.add('dragging-col'));
-  }
-});
-$('#board')?.addEventListener('dragover', (e) => {
-  if (!dragColumn) return;
-  // Must always allow the drop while dragging a column: Chrome cancels the
-  // drop unless the *last* dragover was preventDefault()ed. Don't require a
-  // .column ancestor here — the pointer may sit over gaps, headers or the
-  // board edge, and the position below is computed purely from clientX.
+// column drag reorder — the column follows the pointer via absolute left/top
+let dragColumn = null;
+let dragColumnEl = null;
+let dragStartX = 0;
+let dragStartY = 0;
+let dragRect = null;
+
+$('#board')?.addEventListener('pointerdown', (e) => {
+  if (dragColumn || e.button !== 0) return;
+  if (e.target.closest('.card') || e.target.closest('button, input, textarea, select, a, [contenteditable]')) return;
+  const el = e.target.closest('.column');
+  if (!el) return;
+  dragColumnEl = el;
+  dragStartX = e.clientX;
+  dragStartY = e.clientY;
+  dragRect = el.getBoundingClientRect();
   e.preventDefault();
+  window.addEventListener('pointermove', onColumnPointerMove);
+  window.addEventListener('pointerup', onColumnPointerUp);
+  window.addEventListener('pointercancel', onColumnPointerUp);
+});
+
+function onColumnPointerMove(e) {
+  const el = dragColumnEl;
+  if (!el) return;
+  const dx = e.clientX - dragStartX;
+  const dy = e.clientY - dragStartY;
+  if (!dragColumn) {
+    if (Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
+    dragColumn = el.dataset.columnId;
+    dragging = true;
+    const board = $('#board');
+    const br = board.getBoundingClientRect();
+    el.classList.add('dragging-col');
+    el.style.position = 'absolute';
+    el.style.left = (dragRect.left + board.scrollLeft - br.left) + 'px';
+    el.style.top = (dragRect.top + board.scrollTop - br.top) + 'px';
+    el.style.width = dragRect.width + 'px';
+    el.style.zIndex = '1000';
+    document.body.classList.add('col-dragging');
+  }
+  el.style.left = (parseFloat(el.style.left) + dx) + 'px';
+  el.style.top = (parseFloat(el.style.top) + dy) + 'px';
+  dragStartX = e.clientX;
+  dragStartY = e.clientY;
   clearColumnMarks();
   const cols = [...$$('.column')].filter((c) => c.dataset.columnId !== dragColumn);
   const before = cols.find((c) => e.clientX < c.getBoundingClientRect().left + c.offsetWidth / 2);
   if (before) before.classList.add('col-drop-before');
-  else (cols[cols.length - 1] || e.target.closest('.column'))?.classList.add('col-drop-after');
-});
-$('#board')?.addEventListener('drop', (e) => {
-  if (!dragColumn) return;
-  e.preventDefault();
-  const col = e.target.closest('.column');
-  const cols = [...$$('.column')].filter((c) => c.dataset.columnId !== dragColumn);
-  let pos = cols.length;
-  if (col) {
+  else cols[cols.length - 1]?.classList.add('col-drop-after');
+}
+
+function endColumnDrag(e) {
+  window.removeEventListener('pointermove', onColumnPointerMove);
+  window.removeEventListener('pointerup', onColumnPointerUp);
+  window.removeEventListener('pointercancel', onColumnPointerUp);
+  const el = dragColumnEl;
+  const id = dragColumn ? Number(dragColumn) : null;
+  let pos = null;
+  if (dragColumn) {
+    const cols = [...$$('.column')].filter((c) => c.dataset.columnId !== dragColumn);
     const before = cols.find((c) => e.clientX < c.getBoundingClientRect().left + c.offsetWidth / 2);
     pos = before ? cols.indexOf(before) : cols.length;
   }
-  const id = Number(dragColumn);
   dragColumn = null;
-  dragging = false;
-  dragSource = null;
-  dragColumnEl?.classList.remove('dragging-col');
   dragColumnEl = null;
-  clearColumnMarks();
-  if (renderQueued) { renderQueued = false; }
-  Api.moveColumn(id, pos).catch((err) => showBanner(err.message));
-  if (renderQueued) renderBoard();
-});
-$('#board')?.addEventListener('dragend', (e) => {
-  if (e.target.classList.contains('column')) {
-    dragColumn = null;
-    dragging = false;
-    dragColumnEl?.classList.remove('dragging-col');
-    dragColumnEl = null;
-    clearColumnMarks();
-    if (renderQueued) { renderQueued = false; renderBoard(); }
+  dragRect = null;
+  dragging = false;
+  if (el) {
+    el.classList.remove('dragging-col');
+    el.style.position = '';
+    el.style.left = '';
+    el.style.top = '';
+    el.style.width = '';
+    el.style.zIndex = '';
   }
-});
+  document.body.classList.remove('col-dragging');
+  clearColumnMarks();
+  if (renderQueued) { renderQueued = false; renderBoard(); }
+  if (id !== null && pos !== null) {
+    Api.moveColumn(id, pos).catch((err) => showBanner(err.message));
+  }
+}
 
-let dragColumn = null;
-let dragColumnEl = null;
+function onColumnPointerUp(e) { endColumnDrag(e); }
 
 function clearColumnMarks() {
   $$('.col-drop-before, .col-drop-after').forEach((el) =>

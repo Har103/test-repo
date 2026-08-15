@@ -261,6 +261,7 @@ body {
 .board-actions { display: flex; gap: 8px; }
 
 .board {
+  position: relative;
   display: flex;
   gap: 12px;
   align-items: flex-start;
@@ -268,6 +269,8 @@ body {
   padding-bottom: 12px;
   min-height: calc(100vh - 180px);
 }
+
+body.col-dragging { cursor: grabbing; user-select: none; }
 
 /* ------------------------------ column ---------------------------- */
 
@@ -283,7 +286,7 @@ body {
   border: 2px solid transparent;
 }
 
-.column.dragging-col { opacity: .4; }
+.column.dragging-col { opacity: .4; cursor: grabbing; }
 .column.col-drop-before { border-left-color: var(--primary); }
 .column.col-drop-after { border-right-color: var(--primary); }
 

@@ -360,6 +360,11 @@ const poll = async (fn, timeout = 10000, interval = 250) => {
       await ev('mouseMoved', pts.sx + (pts.tx - pts.sx) * i / 25, pts.sy + (pts.ty - pts.sy) * i / 25, { buttons: 1 });
       await sleep(30);
     }
+    const midDrag = await evalJs(`(() => {
+      const el = [...document.querySelectorAll('.column')].find(c => c.querySelector('.col-title').textContent === 'Col B');
+      return el ? JSON.stringify({ pos: el.style.position, left: el.style.left, cls: el.className }) : 'NOCOL';
+    })()`);
+    ok('column follows pointer (absolute left/top)', midDrag !== 'NOCOL' && (() => { const d = JSON.parse(midDrag); return d.pos === 'absolute' && d.left !== ''; })());
     await ev('mouseReleased', pts.tx, pts.ty, { clickCount: 1 });
   }
   ok('column dragged to front', await poll(() => evalJs(`document.querySelector('.column .col-title').textContent === 'Col B'`), 8000));
