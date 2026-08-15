@@ -136,6 +136,7 @@ node test/api-v2-test.js         # full API: auth, CRUD, sanitizer, uploads, SSE
 node test/browser-e2e-test.js    # real Edge headless via CDP: login, boards,
                                  # card modal, comments, checklist, labels,
                                  # upload, realtime over SSE **and** WS
+node test/ws-e2e-test.js         # raw WS clients + Rust broadcast fan-out
 php test/sanitize-test.php       # HTML sanitizer unit tests
 ```
 

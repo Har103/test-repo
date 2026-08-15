@@ -24,7 +24,7 @@ const httpGet = (url) => new Promise((resolve, reject) => {
   }).on('error', reject);
 });
 
-function cdpCall(ws, id, method, params = {}) {
+function cdpCall(ws, id, method, params = {}, sessionId = null) {
   return new Promise((resolve) => {
     const handler = (ev) => {
       const msg = JSON.parse(ev.data);
@@ -34,7 +34,9 @@ function cdpCall(ws, id, method, params = {}) {
       }
     };
     ws.addEventListener('message', handler);
-    ws.send(JSON.stringify({ id, method, params }));
+    const payload = { id, method, params };
+    if (sessionId) payload.sessionId = sessionId;
+    ws.send(JSON.stringify(payload));
   });
 }
 
@@ -113,6 +115,7 @@ const poll = async (fn, timeout = 10000, interval = 250) => {
   // ------------------------- auth screen --------------------------
   await cdpCall(ws, 3, 'Page.navigate', { url: BASE + '/' });
   await sleep(4000);
+  await evalJs(`localStorage.removeItem('dockup.transport'); true`); // force SSE default
   const loggedIn = await evalJs(`document.getElementById('app').classList.contains('hidden') === false`);
   if (!loggedIn) {
     ok('auth screen visible', await evalJs(`!document.getElementById('auth-screen').classList.contains('hidden')`));
@@ -242,13 +245,39 @@ const poll = async (fn, timeout = 10000, interval = 250) => {
   ok('attachment uploaded + preview', await poll(() => evalJs(`document.querySelectorAll('.attachment img').length >= 1`), 8000));
   fs.unlinkSync(pngPath);
 
-  // --------------------- switch transport to WS -------------------
-  await evalJs(`document.getElementById('card-modal').close(); true`);
-  await evalJs(`localStorage.setItem('dockup.transport', 'ws'); location.reload(); true`);
-  await sleep(5000);
-  await evalJs(`[...document.querySelectorAll('.board-tile')].find(t => t.textContent.includes('E2E Board')).click(); true`);
-  await poll(() => evalJs(`!document.getElementById('view-board').classList.contains('hidden')`));
-  ok('WS connected', await poll(() => evalJs(`/WebSocket.*connected/.test(document.getElementById('conn-label').textContent)`), 8000));
+  // --------------------- second tab realtime ----------------------
+  const { result: { targetId } } = await cdpCall(ws, 500, 'Target.createTarget', { url: 'about:blank' });
+  const { result: { sessionId } } = await cdpCall(ws, 501, 'Target.attachToTarget', { targetId, flatten: true });
+  const ev2 = async (expr) => {
+    const r = await cdpCall(ws, Math.floor(Math.random() * 1e9), 'Runtime.evaluate',
+      { expression: expr, returnByValue: true, awaitPromise: true }, sessionId);
+    if (r.result?.exceptionDetails) throw new Error('tab2 JS: ' + (r.result.exceptionDetails.exception?.description || r.result.exceptionDetails.text));
+    return r.result?.result?.value;
+  };
+  await cdpCall(ws, 502, 'Page.enable', {}, sessionId);
+  await cdpCall(ws, 503, 'Runtime.enable', {}, sessionId);
+  await cdpCall(ws, 504, 'Page.navigate', { url: BASE + '/' }, sessionId);
+  await sleep(4000);
+  await ev2(`[...document.querySelectorAll('.board-tile')].find(t => t.textContent.includes('E2E Board')).click(); true`);
+  await poll(async () => ev2(`!document.getElementById('view-board').classList.contains('hidden')`), 8000);
+  ok('second tab opens same board', await ev2(`document.getElementById('board-title').textContent === 'E2E Board'`));
+
+  await evalJs(`window.prompt = () => 'E2E second card'; true`);
+  await evalJs(`document.querySelector('.add-card').click(); true`);
+  ok('card made in tab 1 appears in tab 2', await poll(async () => ev2(`[...document.querySelectorAll('.card-title')].some(el => el.textContent === 'E2E second card')`), 10000));
+  await cdpCall(ws, 505, 'Target.closeTarget', { targetId });
+
+  // --------------- switch transport via Settings UI (no reload) ---
+  await evalJs(`document.getElementById('btn-settings').click(); true`);
+  await sleep(400);
+  await evalJs(`(() => {
+    const wsRadio = document.querySelector('input[name="transport"][value="ws"]');
+    wsRadio.checked = true;
+    document.getElementById('btn-apply-settings').click();
+    return true;
+  })()`);
+  ok('WS connected (settings switch, no reload)', await poll(() => evalJs(`/WebSocket.*connected/.test(document.getElementById('conn-label').textContent)`), 8000));
+  ok('still on same board after switch', await evalJs(`document.getElementById('board-title').textContent === 'E2E Board'`));
 
   await api('POST', `/api/boards/${testBoardId}/columns`, { title: 'Ws Col' });
   ok('Node-added column arrives via WS', await poll(() => evalJs(`[...document.querySelectorAll('.col-title')].some(el => el.textContent === 'Ws Col')`), 8000));
@@ -258,6 +287,7 @@ const poll = async (fn, timeout = 10000, interval = 250) => {
     await api('DELETE', `/api/boards/${testBoardId}`);
     await sleep(500);
   }
+  await evalJs(`localStorage.setItem('dockup.transport', 'sse'); true`);
 
   console.log('exceptions:', JSON.stringify(exceptions));
   console.log('console errors:', JSON.stringify(consoleErrors));

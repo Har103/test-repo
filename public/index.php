@@ -168,7 +168,6 @@ echo <<<HTML
                  data-placeholder="Write a comment…"></div>
             <div class="cm-foot">
               <button id="cm-save-comment" class="btn primary xs">Post comment</button>
-              <span class="cm-hint">Markdown-style <code>#h</code> / <code>#b</code> not needed — use the toolbar</span>
             </div>
           </section>
         </div>
