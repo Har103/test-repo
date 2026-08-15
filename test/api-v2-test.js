@@ -3,6 +3,10 @@
    comments, attachment upload (multipart), permissions, SSE. */
 
 const BASE = process.env.APP_BASE || 'http://localhost/dockerup/public';
+const fs = require('fs');
+const path = require('path');
+
+const UPLOAD_DIR_LOCAL = path.join(__dirname, '..', 'public', 'uploads');
 
 let cookie = '';
 const UNIQ = 't' + Date.now().toString(36);
@@ -245,6 +249,22 @@ const step = (name, fn) => Promise.resolve().then(fn).then(() => console.log('  
     await j('DELETE', `/api/boards/${boardId}`);
     try { await j('GET', `/api/boards/${boardId}`); throw new Error('expected 404'); }
     catch (e) { if (!/404/.test(e.message)) throw e; }
+  });
+
+  await step('board delete removes files from disk', async () => {
+    const b = await j('POST', '/api/boards', { title: 'file-cleanup' });
+    const bid = b.board.id;
+    const col = await j('POST', `/api/boards/${bid}/columns`, { title: 'T' });
+    const c = await j('POST', `/api/columns/${col.column.id}/cards`, { title: 'c' });
+    const fd = new FormData();
+    fd.append('file', new File([Buffer.from([0x50, 0x4B, 0x03, 0x04])], 'junk.zip', { type: 'application/zip' }));
+    const res = await fetch(`${BASE}/api/cards/${c.card.id}/attachments`, { method: 'POST', body: fd, headers: { cookie } });
+    const att = (await res.json()).attachment;
+    if (!att || !att.stored) throw new Error('no attachment stored');
+    const full = path.join(UPLOAD_DIR_LOCAL, att.stored);
+    if (!fs.existsSync(full)) throw new Error('file not on disk: ' + full);
+    await j('DELETE', `/api/boards/${bid}`);
+    if (fs.existsSync(full)) throw new Error('file left on disk after board delete: ' + full);
   });
 
   console.log(process.exitCode ? '\n== SOME TESTS FAILED ==' : '\n== ALL V2 API TESTS PASSED ==');

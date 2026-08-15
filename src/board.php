@@ -49,6 +49,14 @@ function delete_board(int $boardId, int $userId): bool
     if (board_owned($boardId, $userId) === null) {
         return false;
     }
+    $s = db()->prepare('SELECT a.stored FROM attachments a
+        JOIN cards c ON c.id = a.card_id
+        JOIN board_columns bc ON bc.id = c.column_id
+        WHERE bc.board_id = ?');
+    $s->execute([$boardId]);
+    foreach ($s->fetchAll(PDO::FETCH_COLUMN) as $stored) {
+        @unlink(upload_dir() . '/' . $stored);
+    }
     db()->prepare('DELETE FROM boards WHERE id = ?')->execute([$boardId]);
     return true;
 }
@@ -158,6 +166,11 @@ function delete_column(int $columnId): bool
     $row = $col->fetch();
     if ($row === null) {
         return false;
+    }
+    $s = db()->prepare('SELECT a.stored FROM attachments a JOIN cards c ON c.id = a.card_id WHERE c.column_id = ?');
+    $s->execute([$columnId]);
+    foreach ($s->fetchAll(PDO::FETCH_COLUMN) as $stored) {
+        @unlink(upload_dir() . '/' . $stored);
     }
     db()->prepare('DELETE FROM board_columns WHERE id = ?')->execute([$columnId]);
     return true;
