@@ -253,8 +253,16 @@ function api_dispatch(): void
     if ($seg[0] === 'api' && $seg[1] === 'labels' && isset($seg[2])) {
         if ($method === 'DELETE') {
             guard_mutation();
-            delete_label((int) $seg[2]);
-            send_json(['ok' => true]);
+            $label = db()->prepare('SELECT l.*, bc.board_id FROM card_labels l
+                JOIN cards c ON c.id = l.card_id JOIN board_columns bc ON bc.id = c.column_id WHERE l.id = ?');
+            $label->execute([(int) $seg[2]]);
+            $row = $label->fetch();
+            if (delete_label((int) $seg[2]) && $row) {
+                record_event('label.deleted', (int) $row['board_id'],
+                    ['id' => (int) $seg[2], 'cardId' => (int) $row['card_id']]);
+                send_json(['ok' => true]);
+            }
+            send_error('Label not found', 404);
         }
     }
     if ($seg[0] === 'api' && $seg[1] === 'checklist' && isset($seg[2])) {
@@ -278,14 +286,24 @@ function api_dispatch(): void
         }
         if ($method === 'DELETE') {
             guard_mutation();
-            delete_checklist_item($itemId);
-            record_event('checklist.deleted', $boardId, ['id' => $itemId]);
-            send_json(['ok' => true]);
+            if (delete_checklist_item($itemId)) {
+                record_event('checklist.deleted', $boardId, ['id' => $itemId, 'cardId' => (int) $row['card_id']]);
+                send_json(['ok' => true]);
+            }
+            send_error('Item not found', 404);
         }
     }
     if ($seg[0] === 'api' && $seg[1] === 'comments' && isset($seg[2]) && $method === 'DELETE') {
         guard_mutation();
-        if (delete_comment((int) $seg[2], $userId)) { send_json(['ok' => true]); }
+        $comment = db()->prepare('SELECT cm.*, bc.board_id FROM comments cm
+            JOIN cards c ON c.id = cm.card_id JOIN board_columns bc ON bc.id = c.column_id WHERE cm.id = ?');
+        $comment->execute([(int) $seg[2]]);
+        $row = $comment->fetch();
+        if (delete_comment((int) $seg[2], $userId) && $row) {
+            record_event('comment.deleted', (int) $row['board_id'],
+                ['id' => (int) $seg[2], 'cardId' => (int) $row['card_id']]);
+            send_json(['ok' => true]);
+        }
         send_error('Comment not found', 404);
     }
     if ($seg[0] === 'api' && $seg[1] === 'attachments' && isset($seg[2]) && $method === 'DELETE') {
@@ -295,8 +313,9 @@ function api_dispatch(): void
         $att->execute([(int) $seg[2]]);
         $row = $att->fetch();
         $boardId = $row ? (int) $row['board_id'] : 0;
-        if (delete_attachment((int) $seg[2], $userId)) {
-            record_event('attachment.deleted', $boardId, ['id' => (int) $seg[2]]);
+        if (delete_attachment((int) $seg[2], $userId) && $row) {
+            record_event('attachment.deleted', $boardId,
+                ['id' => (int) $seg[2], 'cardId' => (int) $row['card_id']]);
             send_json(['ok' => true]);
         }
         send_error('Attachment not found', 404);

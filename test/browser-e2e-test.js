@@ -104,10 +104,15 @@ const poll = async (fn, timeout = 10000, interval = 250) => {
   await cdpCall(ws, 1, 'Page.enable');
   await cdpCall(ws, 2, 'Runtime.enable');
 
-  const evalJs = async (expr) => {
-    const r = await cdpCall(ws, Math.floor(Math.random() * 1e9), 'Runtime.evaluate', {
+  const evalJs = async (expr, timeoutMs = 15000) => {
+    const id = Math.floor(Math.random() * 1e9);
+    const p = cdpCall(ws, id, 'Runtime.evaluate', {
       expression: expr, returnByValue: true, awaitPromise: true,
     });
+    const r = await Promise.race([
+      p,
+      sleep(timeoutMs).then(() => { throw new Error(`eval timeout: ${expr.slice(0, 60)}`); }),
+    ]);
     if (r.result?.exceptionDetails) throw new Error('JS: ' + (r.result.exceptionDetails.exception?.description || r.result.exceptionDetails.text));
     return r.result?.result?.value;
   };
@@ -117,17 +122,22 @@ const poll = async (fn, timeout = 10000, interval = 250) => {
   await sleep(4000);
   await evalJs(`localStorage.removeItem('dockup.transport'); true`); // force SSE default
   const loggedIn = await evalJs(`document.getElementById('app').classList.contains('hidden') === false`);
-  if (!loggedIn) {
-    ok('auth screen visible', await evalJs(`!document.getElementById('auth-screen').classList.contains('hidden')`));
-    await evalJs(`(() => {
-      const set = (id, v) => { const el = document.getElementById(id); el.value = v; el.dispatchEvent(new Event('input', {bubbles:true})); };
-      set('login-user', 'demo'); set('login-pass', 'demo123');
-      document.getElementById('login-form').dispatchEvent(new Event('submit', {bubbles:true, cancelable:true}));
-      return true;
-    })()`);
-  } else {
-    console.log('  (already logged in from previous run)');
+  if (loggedIn) {
+    const user = await evalJs(`document.getElementById('username').textContent`);
+    console.log(`  (already logged in as ${user} — logging out)`);
+    await evalJs(`document.getElementById('btn-logout').click(); true`);
+    await sleep(3000);
   }
+  if (!(await evalJs(`!document.getElementById('auth-screen').classList.contains('hidden')`))) {
+    await sleep(2000);
+  }
+  ok('auth screen visible', await evalJs(`!document.getElementById('auth-screen').classList.contains('hidden')`));
+  await evalJs(`(() => {
+    const set = (id, v) => { const el = document.getElementById(id); el.value = v; el.dispatchEvent(new Event('input', {bubbles:true})); };
+    set('login-user', 'demo'); set('login-pass', 'demo123');
+    document.getElementById('login-form').dispatchEvent(new Event('submit', {bubbles:true, cancelable:true}));
+    return true;
+  })()`);
   ok('app visible', await poll(() => evalJs(`!document.getElementById('app').classList.contains('hidden')`)));
   ok('username shown', await evalJs(`document.getElementById('username').textContent === 'demo'`));
   ok('boards grid has tiles', await poll(() => evalJs(`document.querySelectorAll('.board-tile').length >= 1`), 8000));
@@ -244,6 +254,7 @@ const poll = async (fn, timeout = 10000, interval = 250) => {
   await cdpCall(ws, 101, 'DOM.setFileInputFiles', { nodeId: nodeId.result.nodeId, files: [pngPath] });
   ok('attachment uploaded + preview', await poll(() => evalJs(`document.querySelectorAll('.attachment img').length >= 1`), 8000));
   fs.unlinkSync(pngPath);
+  await evalJs(`document.getElementById('card-modal').close(); true`);
 
   // --------------------- second tab realtime ----------------------
   const { result: { targetId } } = await cdpCall(ws, 500, 'Target.createTarget', { url: 'about:blank' });
@@ -281,6 +292,142 @@ const poll = async (fn, timeout = 10000, interval = 250) => {
 
   await api('POST', `/api/boards/${testBoardId}/columns`, { title: 'Ws Col' });
   ok('Node-added column arrives via WS', await poll(() => evalJs(`[...document.querySelectorAll('.col-title')].some(el => el.textContent === 'Ws Col')`), 8000));
+
+  // ----------------------- UI interaction checks ------------------
+  await evalJs(`window.prompt = () => 'E2E Renamed'; true`);
+  await evalJs(`document.getElementById('btn-rename-board').click(); true`);
+  ok('board renamed via UI', await poll(() => evalJs(`document.getElementById('board-title').textContent === 'E2E Renamed'`), 8000));
+
+  await evalJs(`(() => {
+    window.prompt = () => 'Renamed Col';
+    document.querySelector('.col-title').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    return true;
+  })()`);
+  ok('column renamed via UI', await poll(() => evalJs(`document.querySelector('.col-title').textContent === 'Renamed Col'`), 8000));
+
+  // drag & drop a card into a new column (synthetic HTML5 DnD events)
+  await api('POST', `/api/boards/${testBoardId}/columns`, { title: 'Col B' });
+  await poll(() => evalJs(`[...document.querySelectorAll('.col-title')].some(el => el.textContent === 'Col B')`), 8000);
+  await evalJs(`(() => {
+    const card = document.querySelector('.card');
+    const dt = new DataTransfer();
+    card.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    const target = [...document.querySelectorAll('.column')].find(c => c.querySelector('.col-title').textContent === 'Col B');
+    const body = target.querySelector('.col-body');
+    const top = body.getBoundingClientRect().top + 5;
+    body.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, clientY: top }));
+    body.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, clientY: top }));
+    card.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: dt }));
+    return true;
+  })()`);
+  ok('card moved to Col B via drag & drop', await poll(() => evalJs(`(() => {
+    const colB = [...document.querySelectorAll('.column')].find(c => c.querySelector('.col-title').textContent === 'Col B');
+    return colB && colB.querySelectorAll('.card').length >= 1;
+  })()`), 8000));
+  const snapDnd = await api('GET', `/api/boards/${testBoardId}`);
+  const colBId = snapDnd.columns.find((c) => c.title === 'Col B').id;
+  ok('card persisted in Col B', snapDnd.columns.find((c) => c.id === colBId).cards.length >= 1);
+
+  // drag & drop a column to the front (synthetic events)
+  await evalJs(`(() => {
+    const colB = [...document.querySelectorAll('.column')].find(c => c.querySelector('.col-title').textContent === 'Col B');
+    const dt = new DataTransfer();
+    colB.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    const first = document.querySelector('.column');
+    const r = first.getBoundingClientRect();
+    first.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, clientX: r.left + 1 }));
+    colB.dispatchEvent(new DragEvent('dragend', { bubbles: true }));
+    return true;
+  })()`);
+  ok('column dragged to front', await poll(() => evalJs(`document.querySelector('.column .col-title').textContent === 'Col B'`), 8000));
+  if ((await evalJs(`document.querySelector('.column .col-title').textContent`)) !== 'Col B') {
+    console.log('  [diag] banner:', await evalJs(`document.getElementById('banner').textContent`));
+    console.log('  [diag] col order:', await evalJs(`JSON.stringify([...document.querySelectorAll('.col-title')].map(el => el.textContent))`));
+    console.log('  [diag] feed:', await evalJs(`JSON.stringify([...document.getElementById('feed-list').children].map(li => li.textContent))`));
+    console.log('  [diag] state:', await evalJs(`JSON.stringify(State.board.columns.map(c => [c.id, c.position]))`));
+    await evalJs(`renderBoard(); true`);
+    console.log('  [diag] dom after renderBoard():', await evalJs(`JSON.stringify([...document.querySelectorAll('.col-title')].map(el => el.textContent))`));
+    const s2 = await api('GET', `/api/boards/${testBoardId}`);
+    console.log('  [diag] server cols:', JSON.stringify(s2.columns.map((c) => [c.id, c.title, c.position])));
+  }
+
+  // open modal and delete each sub-resource via UI
+  await evalJs(`document.querySelector('.card').click(); true`);
+  await poll(() => evalJs(`document.getElementById('card-modal').open`));
+  await evalJs(`window.confirm = () => true; true`);
+  await evalJs(`document.querySelector('.comment .btn.icon').click(); true`);
+  ok('comment deleted via UI', await poll(() => evalJs(`document.querySelectorAll('.comment').length === 0`), 8000));
+  if ((await evalJs(`document.querySelectorAll('#cm-labels .lbl').length`)) === 0) {
+    console.log('  [diag] modal on:', await evalJs(`document.getElementById('cm-board-name').textContent`));
+    console.log('  [diag] modal open:', await evalJs(`document.getElementById('card-modal').open`));
+    console.log('  [diag] labels html:', await evalJs(`document.getElementById('cm-labels').innerHTML`));
+    console.log('  [diag] comments html:', await evalJs(`document.getElementById('cm-comments').innerHTML`));
+    console.log('  [diag] cards:', await evalJs(`JSON.stringify([...document.querySelectorAll('.column')].map(c => [c.querySelector('.col-title').textContent, [...c.querySelectorAll('.card')].map(x => x.dataset.cardId + ':' + x.querySelector('.card-title').textContent)]))`));
+    const d = await api('GET', `/api/cards/${cardId}`);
+    console.log('  [diag] server labels:', JSON.stringify(d.card.labels), 'comments:', JSON.stringify(d.card.comments));
+  }
+  await evalJs(`document.querySelector('#cm-labels .lbl').click(); true`);
+  ok('label deleted via UI', await poll(() => evalJs(`document.querySelectorAll('#cm-labels .lbl').length === 0`), 8000));
+  await evalJs(`document.querySelector('.cl-item .btn').click(); true`);
+  ok('checklist item deleted via UI', await poll(() => evalJs(`document.querySelectorAll('.cl-item').length === 0`), 8000));
+  await evalJs(`document.querySelector('.attachment .btn').click(); true`);
+  ok('attachment deleted via UI', await poll(() => evalJs(`document.querySelectorAll('.attachment').length === 0`), 8000));
+  await evalJs(`document.getElementById('cm-delete').click(); true`);
+  ok('card deleted via modal', await poll(() => evalJs(`!document.getElementById('card-modal').open && document.querySelectorAll('.card').length === 1 && ![...document.querySelectorAll('.card')].some(c => c.dataset.cardId === '${cardId}')`), 8000));
+
+  await evalJs(`(() => {
+    const col = [...document.querySelectorAll('.column')].find(c => c.querySelector('.col-title').textContent === 'Renamed Col');
+    col.querySelector('.del-col').click();
+    return true;
+  })()`);
+  ok('column deleted via UI', await poll(() => evalJs(`[...document.querySelectorAll('.col-title')].every(el => el.textContent !== 'Renamed Col')`), 8000));
+
+  // ------------------- register / logout UI flow -------------------
+  await evalJs(`document.getElementById('btn-logout').click(); true`);
+  await sleep(3000);
+  ok('logout returns to auth screen', await poll(() => evalJs(`!document.getElementById('auth-screen').classList.contains('hidden')`), 8000));
+  const regUser = 'ui' + Date.now().toString(36);
+  await evalJs(`(() => {
+    const set = (id, v) => { const el = document.getElementById(id); el.value = v; el.dispatchEvent(new Event('input', {bubbles:true})); };
+    set('reg-user', '${regUser}'); set('reg-pass', 'secret1');
+    document.getElementById('register-form').dispatchEvent(new Event('submit', {bubbles:true, cancelable:true}));
+    return true;
+  })()`);
+  ok('registered via UI + app opens', await poll(() => evalJs(`!document.getElementById('app').classList.contains('hidden')`), 8000));
+  ok('new user sees empty boards', (await evalJs(`document.querySelectorAll('.board-tile').length`)) === 0);
+  await evalJs(`document.getElementById('btn-new-board').click(); true`);
+  await sleep(300);
+  await evalJs(`(() => {
+    const el = document.getElementById('board-modal-title');
+    el.value = 'Reg Board';
+    el.dispatchEvent(new Event('input', {bubbles:true}));
+    document.getElementById('btn-create-board').click();
+    return true;
+  })()`);
+  ok('new user creates board', await poll(() => evalJs(`document.getElementById('board-title').textContent === 'Reg Board'`), 8000));
+  await evalJs(`window.confirm = () => true; true`); // page reloaded at logout — re-override
+  try {
+    await evalJs(`document.getElementById('btn-delete-board').click(); true`, 20000);
+  } catch (e) {
+    console.log('  [diag] delete click error:', e.message);
+    console.log('  [diag] ws readyState:', ws.readyState);
+    console.log('  [diag] exceptions:', JSON.stringify(exceptions));
+    console.log('  [diag] console errors:', JSON.stringify(consoleErrors));
+    console.log('  [diag] page url:', await cdpCall(ws, 99001, 'Page.getUrl').then((r) => JSON.stringify(r.result)).catch(() => 'cdp dead'));
+    throw e;
+  }
+  ok('new user deletes board', await poll(() => evalJs(`!document.getElementById('view-board').classList.contains('hidden') === false && document.querySelectorAll('.board-tile').length === 0`), 8000));
+
+  // back to demo for the next run
+  await evalJs(`document.getElementById('btn-logout').click(); true`);
+  await sleep(3000);
+  await evalJs(`(() => {
+    const set = (id, v) => { const el = document.getElementById(id); el.value = v; el.dispatchEvent(new Event('input', {bubbles:true})); };
+    set('login-user', 'demo'); set('login-pass', 'demo123');
+    document.getElementById('login-form').dispatchEvent(new Event('submit', {bubbles:true, cancelable:true}));
+    return true;
+  })()`);
+  ok('demo restored for next run', await poll(() => evalJs(`document.getElementById('username').textContent === 'demo'`), 8000));
 
   // --------------------------- cleanup ----------------------------
   if (testBoardId) {

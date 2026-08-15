@@ -335,6 +335,12 @@ function bindBoardViewEvents() {
       }).catch((e) => showBanner(e.message));
     }
   });
+  $('#btn-add-column').addEventListener('click', () => {
+    const title = prompt('Column title');
+    if (title && title.trim()) {
+      Api.addColumn(State.board.board.id, title.trim()).catch((e) => showBanner(e.message));
+    }
+  });
   $('#btn-seed').addEventListener('click', async () => {
     await Api.seed().catch((e) => showBanner(e.message));
     await loadBoards();
@@ -427,6 +433,11 @@ function renderBoard() {
     }
     renderColumn(el, col);
   });
+
+  // Keep DOM order in sync with position order — appendChild moves an
+  // existing element to the end, so re-appending in sorted order fixes
+  // the layout after a column drag/reorder.
+  board.columns.forEach((col) => boardEl.appendChild($(`#col-${col.id}`)));
 }
 
 function renderColumn(el, col) {
@@ -869,11 +880,11 @@ function applyEvent(ev) {
   switch (type) {
     case 'column.created': upsertColumn(data.column); break;
     case 'column.updated': upsertColumn(data.column); break;
-    case 'column.moved': upsertColumn(data.column); break;
+    case 'column.moved': applyColumnMove(data.column); break;
     case 'column.deleted': removeColumn(data.id); break;
     case 'card.created': upsertCard(data.card); break;
     case 'card.updated': upsertCard(data.card); break;
-    case 'card.moved': upsertCard(data.card); break;
+    case 'card.moved': applyCardMove(data.card); break;
     case 'card.deleted': removeCard(data.id); break;
     case 'label.created':
     case 'label.deleted':
@@ -915,6 +926,21 @@ function upsertColumn(col) {
   renderBoard();
 }
 
+// The server renumbers every column in the board when one is moved, but the
+// event only carries the moved column — so recompute the local positions of
+// the remaining columns to keep them in sync.
+function applyColumnMove(col) {
+  const cols = State.board.columns;
+  const from = cols.findIndex((c) => c.id === col.id);
+  if (from === -1) { upsertColumn(col); return; }
+  const cards = cols[from].cards || [];
+  cols.splice(from, 1);
+  const at = Math.max(0, Math.min(col.position, cols.length));
+  cols.splice(at, 0, { ...col, cards });
+  cols.forEach((c, idx) => { c.position = idx; });
+  renderBoard();
+}
+
 function removeColumn(id) {
   State.board.columns = State.board.columns.filter((c) => c.id !== id);
   renderBoard();
@@ -930,6 +956,25 @@ function upsertCard(card) {
     col.cards = col.cards || [];
     col.cards.push(card);
     col.cards.sort((a, b) => a.position - b.position);
+  }
+  renderBoard();
+}
+
+// Same staleness problem as column moves: the server renumbers the cards in
+// both the source and target columns, but the event only carries the moved
+// card — splice it into place locally instead of relying on stale positions.
+function applyCardMove(card) {
+  const cols = State.board.columns;
+  for (const c of cols) {
+    const i = (c.cards || []).findIndex((x) => x.id === card.id);
+    if (i !== -1) c.cards.splice(i, 1);
+  }
+  const to = cols.find((c) => c.id === card.column_id);
+  if (to) {
+    to.cards = to.cards || [];
+    const at = Math.max(0, Math.min(card.position, to.cards.length));
+    to.cards.splice(at, 0, card);
+    to.cards.forEach((x, idx) => { x.position = idx; });
   }
   renderBoard();
 }

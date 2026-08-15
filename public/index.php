@@ -97,6 +97,7 @@ echo <<<HTML
   <main id="view-board" class="view hidden">
     <div class="board-toolbar">
       <div class="board-actions">
+        <button id="btn-add-column" class="btn ghost sm" title="Add a column">+ Add column</button>
         <button id="btn-rename-board" class="btn ghost sm">Rename</button>
         <button id="btn-seed" class="btn ghost sm" title="Add a demo board">Add demo board</button>
       </div>
