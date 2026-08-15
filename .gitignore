@@ -7,3 +7,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# User uploads
+public/uploads/
