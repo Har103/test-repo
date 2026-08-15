@@ -638,6 +638,76 @@ function endColumnDrag(e) {
 
 function onColumnPointerUp(e) { endColumnDrag(e); }
 
+/* ------------------------- draggable dialogs --------------------- */
+// Modal dialogs follow the pointer the same way columns do: the dialog is
+// switched to position:fixed + left/top while dragged and re-centres on
+// the next open.
+
+function makeDialogDraggable(dialog) {
+  if (!dialog) return;
+  let draggingModal = false;
+  let startX = 0, startY = 0;
+  const INTERACTIVE = 'button, input, textarea, select, a, [contenteditable], label';
+
+  dialog.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || e.target.closest(INTERACTIVE)) return;
+    startX = e.clientX;
+    startY = e.clientY;
+    e.preventDefault();
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  });
+
+  function onMove(e) {
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    if (!draggingModal) {
+      if (Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
+      draggingModal = true;
+      const r = dialog.getBoundingClientRect();
+      dialog.style.position = 'fixed';
+      dialog.style.margin = '0';
+      dialog.style.left = r.left + 'px';
+      dialog.style.top = r.top + 'px';
+    }
+    dialog.style.left = (parseFloat(dialog.style.left) + dx) + 'px';
+    dialog.style.top = (parseFloat(dialog.style.top) + dy) + 'px';
+    startX = e.clientX;
+    startY = e.clientY;
+  }
+
+  function onUp() {
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+    window.removeEventListener('pointercancel', onUp);
+    draggingModal = false;
+  }
+
+  dialog.addEventListener('close', () => {
+    resetDialogPosition();
+  });
+
+  // Guarantee the dialog opens centred even if a drag session was never
+  // closed cleanly (page left open mid-drag, etc.).
+  if ('beforetoggle' in dialog) {
+    dialog.addEventListener('beforetoggle', (e) => {
+      if (e.newState === 'open') resetDialogPosition();
+    });
+  }
+
+  function resetDialogPosition() {
+    dialog.style.position = '';
+    dialog.style.margin = '';
+    dialog.style.left = '';
+    dialog.style.top = '';
+  }
+}
+
+makeDialogDraggable($('#card-modal'));
+makeDialogDraggable($('#settings'));
+makeDialogDraggable($('#board-modal'));
+
 function clearColumnMarks() {
   $$('.col-drop-before, .col-drop-after').forEach((el) =>
     el.classList.remove('col-drop-before', 'col-drop-after'));

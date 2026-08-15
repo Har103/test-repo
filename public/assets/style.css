@@ -398,6 +398,9 @@ body.col-dragging { cursor: grabbing; user-select: none; }
   box-shadow: 0 24px 60px rgba(0, 0, 0, .3);
   max-width: 480px;
   width: calc(100vw - 32px);
+  position: fixed;
+  inset: 0;
+  margin: auto;
 }
 
 .modal.wide { max-width: 880px; width: calc(100vw - 32px); }

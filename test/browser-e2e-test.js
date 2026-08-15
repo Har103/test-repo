@@ -286,6 +286,29 @@ const poll = async (fn, timeout = 10000, interval = 250) => {
   // --------------- switch transport via Settings UI (no reload) ---
   await evalJs(`document.getElementById('btn-settings').click(); true`);
   await sleep(400);
+  // drag the settings dialog by its title — must follow the pointer
+  {
+    const r = await evalJs(`(() => {
+      const m = document.getElementById('settings');
+      const t = m.querySelector('h2').getBoundingClientRect();
+      return { sx: t.x + 60, sy: t.y + t.height / 2 };
+    })()`);
+    let mid = 2200;
+    const em = (type, x, y, extra = {}) => cdpCall(ws, mid++, 'Input.dispatchMouseEvent', { type, x, y, button: 'left', ...extra });
+    await em('mousePressed', r.sx, r.sy, { clickCount: 1 });
+    await em('mouseMoved', r.sx + 10, r.sy + 10, { buttons: 1 });
+    await sleep(100);
+    for (let i = 1; i <= 15; i++) {
+      await em('mouseMoved', r.sx + 10 + 110 * i / 15, r.sy + 10 + 50 * i / 15, { buttons: 1 });
+      await sleep(20);
+    }
+    const midState = await evalJs(`(() => {
+      const m = document.getElementById('settings');
+      return JSON.stringify({ fixed: m.style.position === 'fixed', left: m.style.left });
+    })()`);
+    ok('settings dialog drags (fixed left/top follows pointer)', (() => { const d = JSON.parse(midState); return d.fixed && d.left !== ''; })());
+    await em('mouseReleased', r.sx + 120, r.sy + 60, { clickCount: 1 });
+  }
   await evalJs(`(() => {
     const wsRadio = document.querySelector('input[name="transport"][value="ws"]');
     wsRadio.checked = true;
@@ -294,6 +317,16 @@ const poll = async (fn, timeout = 10000, interval = 250) => {
   })()`);
   ok('WS connected (settings switch, no reload)', await poll(() => evalJs(`/WebSocket.*connected/.test(document.getElementById('conn-label').textContent)`), 8000));
   ok('still on same board after switch', await evalJs(`document.getElementById('board-title').textContent === 'E2E Board'`));
+  await evalJs(`document.getElementById('btn-settings').click(); true`);
+  await sleep(300);
+  ok('dialog re-centres on reopen', await evalJs(`(() => {
+    const m = document.getElementById('settings');
+    const r = m.getBoundingClientRect();
+    const centered = Math.abs(r.left - (innerWidth - r.width) / 2) < 2;
+    const clean = m.style.position === '' && m.style.left === '' && m.style.top === '';
+    m.close();
+    return centered && clean;
+  })()`));
 
   await api('POST', `/api/boards/${testBoardId}/columns`, { title: 'Ws Col' });
   ok('Node-added column arrives via WS', await poll(() => evalJs(`[...document.querySelectorAll('.col-title')].some(el => el.textContent === 'Ws Col')`), 8000));
@@ -388,6 +421,33 @@ const poll = async (fn, timeout = 10000, interval = 250) => {
   await evalJs(`document.querySelector('.card').click(); true`);
   await poll(() => evalJs(`document.getElementById('card-modal').open && document.querySelectorAll('.comment .btn.icon').length >= 1`), 10000);
   await evalJs(`window.confirm = () => true; true`);
+
+  // drag the card modal by its header — the dialog must follow the pointer
+  {
+    const r = await evalJs(`(() => {
+      const m = document.getElementById('card-modal');
+      const t = m.querySelector('#cm-board-name').getBoundingClientRect();
+      return { sx: t.x + 40, sy: t.y + t.height / 2, startLeft: m.getBoundingClientRect().left };
+    })()`);
+    let mid = 2100;
+    const em = (type, x, y, extra = {}) => cdpCall(ws, mid++, 'Input.dispatchMouseEvent', { type, x, y, button: 'left', ...extra });
+    await em('mousePressed', r.sx, r.sy, { clickCount: 1 });
+    await em('mouseMoved', r.sx + 8, r.sy + 8, { buttons: 1 });
+    await sleep(100);
+    for (let i = 1; i <= 15; i++) {
+      await em('mouseMoved', r.sx + 8 + 130 * i / 15, r.sy + 8 + 60 * i / 15, { buttons: 1 });
+      await sleep(20);
+    }
+    const midState = await evalJs(`(() => {
+      const m = document.getElementById('card-modal');
+      const b = m.getBoundingClientRect();
+      return JSON.stringify({ fixed: m.style.position === 'fixed', left: m.style.left, moved: Math.abs(b.left - ${r.startLeft}) > 40 });
+    })()`);
+    ok('card modal drags (fixed left/top follows pointer)', (() => { const d = JSON.parse(midState); return d.fixed && d.left !== '' && d.moved; })());
+    await em('mouseReleased', r.sx + 138, r.sy + 68, { clickCount: 1 });
+    ok('card modal still open after drag', await evalJs(`document.getElementById('card-modal').open`));
+  }
+
   await evalJs(`document.querySelector('.comment .btn.icon').click(); true`);
   ok('comment deleted via UI', await poll(() => evalJs(`document.querySelectorAll('.comment').length === 0`), 8000));
   if ((await evalJs(`document.querySelectorAll('#cm-labels .lbl').length`)) === 0) {
