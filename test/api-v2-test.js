@@ -67,7 +67,7 @@ const step = (name, fn) => Promise.resolve().then(fn).then(() => console.log('  
     if (r.user.username !== UNIQ) throw new Error('wrong user');
   });
 
-  let boardId, colA, colB, cardId, labelId, itemId, commentId, attId;
+  let boardId, colA, colB, cardId, labelId, itemId, commentId, zipCommentId, attId;
 
   await step('boards list empty', async () => {
     const r = await j('GET', '/api/boards');
@@ -156,14 +156,42 @@ const step = (name, fn) => Promise.resolve().then(fn).then(() => console.log('  
     if (data.attachment.mime !== 'image/png') throw new Error('mime sniff failed: ' + data.attachment.mime);
   });
 
+  await step('binary file rejected (exe)', async () => {
+    const exe = Buffer.concat([Buffer.from('MZ'), Buffer.from([0x90, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xFF, 0xFF]), Buffer.alloc(64, 0x13)]);
+    const fd = new FormData();
+    fd.append('file', new File([exe], 'virus.exe', { type: 'application/x-msdownload' }));
+    const res = await fetch(`${BASE}/api/cards/${cardId}/attachments`, { method: 'POST', body: fd, headers: { cookie } });
+    if (res.status !== 422) throw new Error('expected 422, got ' + res.status);
+    const data = await res.json();
+    if (!/File type not allowed/.test(data.error || '')) throw new Error('wrong error: ' + data.error);
+  });
+
+  await step('comment with zip attachment (multipart)', async () => {
+    const zip = Buffer.from([0x50, 0x4B, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00]);
+    const fd = new FormData();
+    fd.append('body', '<b>doc attached</b>');
+    fd.append('file', new File([zip], 'bundle.zip', { type: 'application/zip' }));
+    const res = await fetch(`${BASE}/api/cards/${cardId}/comments`, { method: 'POST', body: fd, headers: { cookie } });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'comment upload failed');
+    zipCommentId = data.comment.id;
+    if (!zipCommentId) throw new Error('no comment id');
+    if (!data.comment.body_html.includes('doc attached')) throw new Error('body lost: ' + data.comment.body_html);
+    if (!data.attachment || data.attachment.mime !== 'application/zip') throw new Error('zip attachment missing');
+  });
+
   await step('card detail aggregates', async () => {
     const r = await j('GET', `/api/cards/${cardId}`);
     const c = r.card;
     if (c.labels.length !== 1) throw new Error('labels missing');
     if (c.checklist.length !== 1) throw new Error('checklist missing');
-    if (c.comments.length !== 1) throw new Error('comments missing');
-    if (c.attachments.length !== 1) throw new Error('attachments missing');
-    if (!c.badges || c.badges.checklist !== 1 || c.badges.comments !== 1) throw new Error('badges wrong: ' + JSON.stringify(c.badges));
+    if (c.comments.length !== 2) throw new Error('comments missing: ' + c.comments.length);
+    const zipComment = c.comments.find((x) => x.id === zipCommentId);
+    if (!zipComment || zipComment.attachments.length !== 1 || zipComment.attachments[0].name !== 'bundle.zip') {
+      throw new Error('comment attachment missing: ' + JSON.stringify(c.comments));
+    }
+    if (c.attachments.length !== 1) throw new Error('card attachments should exclude comment ones');
+    if (!c.badges || c.badges.checklist !== 1 || c.badges.comments !== 2) throw new Error('badges wrong: ' + JSON.stringify(c.badges));
   });
 
   await step('other user cannot access board (404)', async () => {
@@ -203,6 +231,7 @@ const step = (name, fn) => Promise.resolve().then(fn).then(() => console.log('  
     await j('DELETE', `/api/labels/${labelId}`);
     await j('DELETE', `/api/checklist/${itemId}`);
     await j('DELETE', `/api/comments/${commentId}`);
+    await j('DELETE', `/api/comments/${zipCommentId}`);
     const r = await j('GET', `/api/cards/${cardId}`);
     if (r.card.attachments.length || r.card.labels.length || r.card.checklist.length || r.card.comments.length) {
       throw new Error('not all deleted');
