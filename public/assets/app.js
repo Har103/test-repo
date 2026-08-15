@@ -13,7 +13,7 @@ const State = {
 const Transport = {
   sse: 'sse',
   ws: 'ws',
-  current: localStorage.getItem('board.transport') || Transport.sse,
+  current: localStorage.getItem('board.transport') || 'sse',
 };
 
 let live = null;            // active transport instance
