@@ -23,12 +23,16 @@ function sanitize_html(?string $html): string
         return sanitize_dom($html);
     }
 
-    // Fallback: tag allowlist only.
-    return (string) preg_replace(
+    // Fallback: tag allowlist only, then mirror sanitize_dom's attribute
+    // policy so handlers and unsafe hrefs cannot survive on allowed tags.
+    $html = (string) preg_replace(
         '#<(?!\s*/?(?:' . implode('|', ALLOWED_TAGS) . ')\b)[^>]*>#is',
         '',
         strip_tags($html, '<' . implode('><', ALLOWED_TAGS) . '>')
     );
+    $html = (string) preg_replace('/(<[a-z][^>]*?)\s+(?:on[a-z]+|style)\s*=\s*(?:([\'"])[^\2]*\2|[^\s>]+)/is', '$1', $html);
+    $html = (string) preg_replace('~(?:href|src)\s*=\s*([\'"])(?!(?:https?|mailto|#):)[^\1]*\1~i', '', $html);
+    return $html;
 }
 
 function sanitize_dom(string $html): string
@@ -65,13 +69,25 @@ function sanitize_dom(string $html): string
 
 function sanitize_node(DOMDocument $doc, DOMNode $node): void
 {
+    if ($node instanceof DOMComment) {
+        // A comment can hide markup from the browser's innerHTML parser
+        // (<!--[if IE]><script>…<![endif]-->); drop it outright.
+        $node->parentNode->removeChild($node);
+        return;
+    }
     if ($node instanceof DOMElement) {
         $tag = strtolower($node->tagName);
 
         if (!in_array($tag, ALLOWED_TAGS, true)) {
-            // Unwrap the element, keep its children.
+            // Unwrap the element, keep its children — but the children were
+            // never sanitized, so run them through sanitize_node as they are
+            // moved out. Without this, <title><script>alert(1)</script></title>
+            // or <form><input autofocus onfocus=alert(1)></form> shed their
+            // wrapper and keep the executable payload.
             while ($node->firstChild) {
-                $node->parentNode->insertBefore($node->firstChild, $node);
+                $child = $node->firstChild;
+                $node->parentNode->insertBefore($child, $node);
+                sanitize_node($doc, $child);
             }
             $node->parentNode->removeChild($node);
             return;
@@ -102,7 +118,7 @@ function sanitize_node(DOMDocument $doc, DOMNode $node): void
     }
 
     foreach (iterator_to_array($node->childNodes) as $child) {
-        if ($child instanceof DOMText || $child instanceof DOMComment) {
+        if ($child instanceof DOMText) {
             continue;
         }
         sanitize_node($doc, $child);

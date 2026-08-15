@@ -52,6 +52,9 @@ function api_dispatch(): void
             $parsed = parse_url('http://' . $host);
             $host = $parsed['host'] ?? config()['ws']['host'];
         }
+        if ($host === null || !preg_match('/^[a-z0-9.-]+$/i', $host)) {
+            $host = config()['ws']['host'];
+        }
         send_json([
             'ok'     => true,
             'time'   => date(DATE_ATOM),

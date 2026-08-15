@@ -231,6 +231,20 @@ const poll = async (fn, timeout = 10000, interval = 250) => {
   const zipHref = await evalJs(`([...document.querySelectorAll('.comment-attachments .attachment-meta a')].map(a => a.href).find(h => h.endsWith('.zip')) || '')`);
   ok('comment attachment served over HTTP', zipHref !== '' && (await httpGet(zipHref).then(() => true).catch(() => false)));
 
+  // XSS payload through the real UI: must render as inert text, never execute
+  await evalJs(`document.getElementById('cm-comment-input').innerHTML = '<title><script>window.__xss=1</script></title><form><input autofocus onfocus="window.__xss=2"></form><a href="javascript:window.__xss=3">badlink</a>'; true`);
+  await evalJs(`document.getElementById('cm-save-comment').click(); true`);
+  ok('xss payload comment posted', await poll(() => evalJs(`[...document.querySelectorAll('.comment')].some(c => (c.querySelector('.comment-body')?.textContent || '').includes('window.__xss=1'))`), 8000));
+  ok('xss payload inert in DOM', await evalJs(`(() => {
+    const box = document.getElementById('cm-comments');
+    return window.__xss === undefined
+      && document.querySelectorAll('#cm-comments script').length === 0
+      && !/<\\s*script/i.test(box.innerHTML)
+      && (box.innerHTML.match(/on[a-z]+\\s*=/gi) || []).length === 0
+      && (box.innerHTML.match(/javascript\\s*:/gi) || []).length === 0
+      && !box.innerHTML.includes('<form') && !box.innerHTML.includes('<input');
+  })()`));
+
 
   // checklist
   await evalJs(`(() => {

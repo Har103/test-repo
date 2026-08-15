@@ -1,0 +1,8 @@
+# Uploads are content, never code. Stored names are server-generated
+# hex + an allowed extension, but refuse PHP-family execution regardless.
+<FilesMatch "\.(php|phtml|phar|php3|php4|php5|php7|pht)$">
+  Require all denied
+</FilesMatch>
+<IfModule mod_php.c>
+  php_flag engine off
+</IfModule>

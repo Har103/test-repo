@@ -71,7 +71,7 @@ const step = (name, fn) => Promise.resolve().then(fn).then(() => console.log('  
     if (r.user.username !== UNIQ) throw new Error('wrong user');
   });
 
-  let boardId, colA, colB, cardId, labelId, itemId, commentId, zipCommentId, attId;
+  let boardId, colA, colB, cardId, labelId, itemId, commentId, zipCommentId, xssCommentId, attId;
 
   await step('boards list empty', async () => {
     const r = await j('GET', '/api/boards');
@@ -112,9 +112,13 @@ const step = (name, fn) => Promise.resolve().then(fn).then(() => console.log('  
 
   await step('rich description sanitized', async () => {
     const r = await j('PUT', `/api/cards/${cardId}`, {
-      description: '<p>Hello <b>world</b></p><script>alert(1)</script><img src=x onerror=alert(2)>',
+      description: '<p>Hello <b>world</b></p><script>alert(1)</script><img src=x onerror=alert(2)>'
+        + '<title><script>alert(3)</script></title><form><input autofocus onfocus="alert(4)">',
     });
     if (r.card.description_html.includes('script')) throw new Error('script survived');
+    if (r.card.description_html.includes('<img')) throw new Error('img survived');
+    if (r.card.description_html.includes('<input') || r.card.description_html.includes('<form')) throw new Error('form/input survived');
+    if (/on[a-z]+\s*=/.test(r.card.description_html)) throw new Error('handler survived');
     if (!r.card.description_html.includes('<b>world</b>')) throw new Error('bold lost');
   });
 
@@ -147,6 +151,24 @@ const step = (name, fn) => Promise.resolve().then(fn).then(() => console.log('  
     const r = await j('POST', `/api/cards/${cardId}/comments`, { body: '<b>hi</b> <script>x</script>' });
     commentId = r.comment.id;
     if (!commentId || r.comment.body_html.includes('script')) throw new Error('comment bad');
+  });
+
+  await step('comment sanitizer kills script/handlers (unwrap bug regression)', async () => {
+    const r = await j('POST', `/api/cards/${cardId}/comments`, {
+      body: '<title><script>window.__xss=1</script></title>'
+        + '<form><input autofocus onfocus="window.__xss=2"></form>'
+        + '<a href="javascript:alert(1)">x</a><p onclick="alert(2)">y</p>'
+        + '<!--[if IE]><script>window.__xss=3</script><![endif]-->',
+    });
+    xssCommentId = r.comment.id;
+    if (!xssCommentId) throw new Error('no comment id');
+    const h = r.comment.body_html.toLowerCase();
+    if (h.includes('<script') || h.includes('</script')) throw new Error('script survived: ' + h);
+    if (h.includes('<input') || h.includes('<form') || h.includes('<title')) throw new Error('wrapper survived: ' + h);
+    if (/on[a-z]+\s*=/.test(h)) throw new Error('handler survived: ' + h);
+    if (h.includes('javascript:')) throw new Error('js href survived: ' + h);
+    if (h.includes('<!--')) throw new Error('comment survived: ' + h);
+    if (!h.includes('window.__xss=1')) throw new Error('inert text lost: ' + h);
   });
 
   await step('attachment upload (png)', async () => {
@@ -189,13 +211,13 @@ const step = (name, fn) => Promise.resolve().then(fn).then(() => console.log('  
     const c = r.card;
     if (c.labels.length !== 1) throw new Error('labels missing');
     if (c.checklist.length !== 1) throw new Error('checklist missing');
-    if (c.comments.length !== 2) throw new Error('comments missing: ' + c.comments.length);
+    if (c.comments.length !== 3) throw new Error('comments missing: ' + c.comments.length);
     const zipComment = c.comments.find((x) => x.id === zipCommentId);
     if (!zipComment || zipComment.attachments.length !== 1 || zipComment.attachments[0].name !== 'bundle.zip') {
       throw new Error('comment attachment missing: ' + JSON.stringify(c.comments));
     }
     if (c.attachments.length !== 1) throw new Error('card attachments should exclude comment ones');
-    if (!c.badges || c.badges.checklist !== 1 || c.badges.comments !== 2) throw new Error('badges wrong: ' + JSON.stringify(c.badges));
+    if (!c.badges || c.badges.checklist !== 1 || c.badges.comments !== 3) throw new Error('badges wrong: ' + JSON.stringify(c.badges));
   });
 
   await step('other user cannot access board (404)', async () => {
@@ -236,6 +258,7 @@ const step = (name, fn) => Promise.resolve().then(fn).then(() => console.log('  
     await j('DELETE', `/api/checklist/${itemId}`);
     await j('DELETE', `/api/comments/${commentId}`);
     await j('DELETE', `/api/comments/${zipCommentId}`);
+    await j('DELETE', `/api/comments/${xssCommentId}`);
     const r = await j('GET', `/api/cards/${cardId}`);
     if (r.card.attachments.length || r.card.labels.length || r.card.checklist.length || r.card.comments.length) {
       throw new Error('not all deleted');
