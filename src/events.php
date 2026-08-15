@@ -50,6 +50,15 @@ function record_event(string $type, int $boardId, array $data, ?string $clientTx
     $stmt = db()->prepare('INSERT INTO events (board_id, actor_id, type, payload, client_tx) VALUES (?, ?, ?, ?, ?)');
     $stmt->execute([$boardId, $user['id'] ?? null, $type, $payload, $clientTx ?? '']);
 
+    // Keep the table bounded: nothing older than an hour is ever replayed
+    // (fresh SSE connects only see the last 15 seconds), so old rows are
+    // pure growth. Delete them opportunistically.
+    static $pruned = false;
+    if (!$pruned) {
+        $pruned = true;
+        db()->prepare('DELETE FROM events WHERE created_at < DATE_SUB(NOW(), INTERVAL 1 HOUR)')->execute();
+    }
+
     ws_broadcast($payload);
 }
 

@@ -403,15 +403,30 @@ function sse_stream(int $boardId): void
     echo ": connected\n\n";
     flush();
 
+    // Fresh connects (no Last-Event-ID) must not replay the full history:
+    // the board snapshot already carries the current state, and replaying
+    // old column.created / card.created events would resurrect entities
+    // that have since been deleted. Only replay the last 15 seconds to
+    // cover the snapshot -> connect race. Reconnecting clients keep the
+    // normal id-based replay.
     $lastId = isset($_SERVER['HTTP_LAST_EVENT_ID']) ? max(0, (int) $_SERVER['HTTP_LAST_EVENT_ID']) : 0;
-    $stmt = db()->prepare('SELECT id, payload FROM events WHERE id > ? AND board_id = ? ORDER BY id LIMIT 50');
+    if ($lastId === 0) {
+        // Compute the cutoff inside MariaDB so we don't mix PHP/MariaDB
+        // timezones (they differ on this box).
+        $stmt = db()->prepare('SELECT id, payload FROM events WHERE id > ? AND board_id = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 15 SECOND) ORDER BY id LIMIT 50');
+        $args = [$lastId, $boardId];
+    } else {
+        $stmt = db()->prepare('SELECT id, payload FROM events WHERE id > ? AND board_id = ? ORDER BY id LIMIT 50');
+        $args = [$lastId, $boardId];
+    }
+    $stmt->execute($args);
 
     $heartbeat = 0;
     while (true) {
         if (connection_aborted()) {
             exit;
         }
-        $stmt->execute([$lastId, $boardId]);
+        $stmt->execute($args);
         while ($row = $stmt->fetch()) {
             $lastId = (int) $row['id'];
             echo 'id: ', $lastId, "\n";

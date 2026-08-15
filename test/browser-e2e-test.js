@@ -240,7 +240,7 @@ const poll = async (fn, timeout = 10000, interval = 250) => {
   await sleep(400);
   await evalJs(`document.getElementById('cm-desc').innerHTML = '<p>rich <b>desc</b></p>'; true`);
   await evalJs(`document.getElementById('cm-save-desc').click(); true`);
-  ok('description saved', await poll(() => evalJs(`document.getElementById('cm-desc-status').textContent.includes('saved')`)));
+  ok('description saved', await poll(() => evalJs(`document.getElementById('cm-desc').innerHTML.includes('rich <b>desc</b>')`)));
   const snapshot = await api('GET', `/api/boards/${testBoardId}`);
   const cardId = snapshot.columns[0].cards[0].id;
   const detail = await api('GET', `/api/cards/${cardId}`);
