@@ -1,0 +1,9 @@
+# Rust build output
+server/target/
+
+# OS noise
+Thumbs.db
+.DS_Store
+
+# Logs
+*.log

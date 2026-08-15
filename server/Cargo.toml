@@ -1,0 +1,7 @@
+[package]
+name = "board_ws"
+version = "0.1.0"
+edition = "2021"
+description = "Realtime broadcast server for the Realtime Task Board. Pure std: WebSocket (RFC 6455), SHA-1 and base64 implemented by hand."
+
+[dependencies]
