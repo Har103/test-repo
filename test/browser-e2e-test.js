@@ -103,6 +103,10 @@ const poll = async (fn, timeout = 10000, interval = 250) => {
 
   await cdpCall(ws, 1, 'Page.enable');
   await cdpCall(ws, 2, 'Runtime.enable');
+  // Realistic viewport: native drag & drop needs enough room for the
+  // columns to be fully visible side by side (headless default 800x600
+  // would overflow the board and cancel drops outside the visible area).
+  await cdpCall(ws, 4, 'Emulation.setDeviceMetricsOverride', { width: 1366, height: 850, deviceScaleFactor: 1, mobile: false });
 
   const evalJs = async (expr, timeoutMs = 15000) => {
     const id = Math.floor(Math.random() * 1e9);
@@ -241,6 +245,7 @@ const poll = async (fn, timeout = 10000, interval = 250) => {
   await evalJs(`document.getElementById('cm-desc').innerHTML = '<p>rich <b>desc</b></p>'; true`);
   await evalJs(`document.getElementById('cm-save-desc').click(); true`);
   ok('description saved', await poll(() => evalJs(`document.getElementById('cm-desc').innerHTML.includes('rich <b>desc</b>')`)));
+  await sleep(600);
   const snapshot = await api('GET', `/api/boards/${testBoardId}`);
   const cardId = snapshot.columns[0].cards[0].id;
   const detail = await api('GET', `/api/cards/${cardId}`);
@@ -305,21 +310,30 @@ const poll = async (fn, timeout = 10000, interval = 250) => {
   })()`);
   ok('column renamed via UI', await poll(() => evalJs(`document.querySelector('.col-title').textContent === 'Renamed Col'`), 8000));
 
-  // drag & drop a card into a new column (synthetic HTML5 DnD events)
+  // drag & drop a card into a new column (real mouse drag via CDP Input,
+  // so native HTML5 DnD semantics apply — synthetic DragEvents cannot catch
+  // drop-cancellation / stuck-class bugs)
   await api('POST', `/api/boards/${testBoardId}/columns`, { title: 'Col B' });
   await poll(() => evalJs(`[...document.querySelectorAll('.col-title')].some(el => el.textContent === 'Col B')`), 8000);
-  await evalJs(`(() => {
-    const card = document.querySelector('.card');
-    const dt = new DataTransfer();
-    card.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt }));
-    const target = [...document.querySelectorAll('.column')].find(c => c.querySelector('.col-title').textContent === 'Col B');
-    const body = target.querySelector('.col-body');
-    const top = body.getBoundingClientRect().top + 5;
-    body.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, clientY: top }));
-    body.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, clientY: top }));
-    card.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: dt }));
-    return true;
-  })()`);
+  {
+    const pts = await evalJs(`(() => {
+      const card = document.querySelector('.card');
+      const cr = card.getBoundingClientRect();
+      const body = [...document.querySelectorAll('.column')].find(c => c.querySelector('.col-title').textContent === 'Col B').querySelector('.col-body');
+      const br = body.getBoundingClientRect();
+      return { sx: cr.x + cr.width / 2, sy: cr.y + cr.height / 2, tx: br.x + br.width / 2, ty: br.y + br.height / 2 };
+    })()`);
+    let dndId = 1000;
+    const ev = (type, x, y, extra = {}) => cdpCall(ws, dndId++, 'Input.dispatchMouseEvent', { type, x, y, button: 'left', ...extra });
+    await ev('mousePressed', pts.sx, pts.sy, { clickCount: 1 });
+    await ev('mouseMoved', pts.sx + 5, pts.sy + 5, { buttons: 1 });
+    await sleep(150);
+    for (let i = 1; i <= 25; i++) {
+      await ev('mouseMoved', pts.sx + (pts.tx - pts.sx) * i / 25, pts.sy + (pts.ty - pts.sy) * i / 25, { buttons: 1 });
+      await sleep(30);
+    }
+    await ev('mouseReleased', pts.tx, pts.ty, { clickCount: 1 });
+  }
   ok('card moved to Col B via drag & drop', await poll(() => evalJs(`(() => {
     const colB = [...document.querySelectorAll('.column')].find(c => c.querySelector('.col-title').textContent === 'Col B');
     return colB && colB.querySelectorAll('.card').length >= 1;
@@ -328,18 +342,32 @@ const poll = async (fn, timeout = 10000, interval = 250) => {
   const colBId = snapDnd.columns.find((c) => c.title === 'Col B').id;
   ok('card persisted in Col B', snapDnd.columns.find((c) => c.id === colBId).cards.length >= 1);
 
-  // drag & drop a column to the front (synthetic events)
-  await evalJs(`(() => {
-    const colB = [...document.querySelectorAll('.column')].find(c => c.querySelector('.col-title').textContent === 'Col B');
-    const dt = new DataTransfer();
-    colB.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt }));
-    const first = document.querySelector('.column');
-    const r = first.getBoundingClientRect();
-    first.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, clientX: r.left + 1 }));
-    colB.dispatchEvent(new DragEvent('dragend', { bubbles: true }));
-    return true;
-  })()`);
+  // drag & drop a column to the front (real mouse drag)
+  {
+    const pts = await evalJs(`(() => {
+      const colB = [...document.querySelectorAll('.column')].find(c => c.querySelector('.col-title').textContent === 'Col B');
+      const cr = colB.getBoundingClientRect();
+      const first = document.querySelector('.column');
+      const fr = first.getBoundingClientRect();
+      return { sx: cr.x + cr.width / 2, sy: cr.y + 20, tx: fr.x + fr.width * 0.25, ty: fr.y + 20 };
+    })()`);
+    let dndId = 1100;
+    const ev = (type, x, y, extra = {}) => cdpCall(ws, dndId++, 'Input.dispatchMouseEvent', { type, x, y, button: 'left', ...extra });
+    await ev('mousePressed', pts.sx, pts.sy, { clickCount: 1 });
+    await ev('mouseMoved', pts.sx + 5, pts.sy + 5, { buttons: 1 });
+    await sleep(150);
+    for (let i = 1; i <= 25; i++) {
+      await ev('mouseMoved', pts.sx + (pts.tx - pts.sx) * i / 25, pts.sy + (pts.ty - pts.sy) * i / 25, { buttons: 1 });
+      await sleep(30);
+    }
+    await ev('mouseReleased', pts.tx, pts.ty, { clickCount: 1 });
+  }
   ok('column dragged to front', await poll(() => evalJs(`document.querySelector('.column .col-title').textContent === 'Col B'`), 8000));
+  // the dragged column must not stay semi-transparent after the move
+  ok('column not stuck semi-transparent', await poll(() => evalJs(`(() => {
+    const el = [...document.querySelectorAll('.column')].find(c => c.querySelector('.col-title').textContent === 'Col B');
+    return el && !el.classList.contains('dragging-col') && getComputedStyle(el).opacity === '1';
+  })()`), 8000));
   if ((await evalJs(`document.querySelector('.column .col-title').textContent`)) !== 'Col B') {
     console.log('  [diag] banner:', await evalJs(`document.getElementById('banner').textContent`));
     console.log('  [diag] col order:', await evalJs(`JSON.stringify([...document.querySelectorAll('.col-title')].map(el => el.textContent))`));
@@ -353,7 +381,7 @@ const poll = async (fn, timeout = 10000, interval = 250) => {
 
   // open modal and delete each sub-resource via UI
   await evalJs(`document.querySelector('.card').click(); true`);
-  await poll(() => evalJs(`document.getElementById('card-modal').open`));
+  await poll(() => evalJs(`document.getElementById('card-modal').open && document.querySelectorAll('.comment .btn.icon').length >= 1`), 10000);
   await evalJs(`window.confirm = () => true; true`);
   await evalJs(`document.querySelector('.comment .btn.icon').click(); true`);
   ok('comment deleted via UI', await poll(() => evalJs(`document.querySelectorAll('.comment').length === 0`), 8000));

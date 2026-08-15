@@ -557,19 +557,22 @@ $('#board')?.addEventListener('dragstart', (e) => {
   if (e.target.classList.contains('column')) {
     dragging = true;
     dragColumn = e.target.dataset.columnId;
+    dragColumnEl = e.target;
     requestAnimationFrame(() => e.target.classList.add('dragging-col'));
   }
 });
 $('#board')?.addEventListener('dragover', (e) => {
   if (!dragColumn) return;
-  const col = e.target.closest('.column');
-  if (!col) return;
+  // Must always allow the drop while dragging a column: Chrome cancels the
+  // drop unless the *last* dragover was preventDefault()ed. Don't require a
+  // .column ancestor here — the pointer may sit over gaps, headers or the
+  // board edge, and the position below is computed purely from clientX.
   e.preventDefault();
   clearColumnMarks();
   const cols = [...$$('.column')].filter((c) => c.dataset.columnId !== dragColumn);
   const before = cols.find((c) => e.clientX < c.getBoundingClientRect().left + c.offsetWidth / 2);
   if (before) before.classList.add('col-drop-before');
-  else (cols[cols.length - 1] || col).classList.add('col-drop-after');
+  else (cols[cols.length - 1] || e.target.closest('.column'))?.classList.add('col-drop-after');
 });
 $('#board')?.addEventListener('drop', (e) => {
   if (!dragColumn) return;
@@ -585,6 +588,8 @@ $('#board')?.addEventListener('drop', (e) => {
   dragColumn = null;
   dragging = false;
   dragSource = null;
+  dragColumnEl?.classList.remove('dragging-col');
+  dragColumnEl = null;
   clearColumnMarks();
   if (renderQueued) { renderQueued = false; }
   Api.moveColumn(id, pos).catch((err) => showBanner(err.message));
@@ -594,12 +599,15 @@ $('#board')?.addEventListener('dragend', (e) => {
   if (e.target.classList.contains('column')) {
     dragColumn = null;
     dragging = false;
+    dragColumnEl?.classList.remove('dragging-col');
+    dragColumnEl = null;
     clearColumnMarks();
     if (renderQueued) { renderQueued = false; renderBoard(); }
   }
 });
 
 let dragColumn = null;
+let dragColumnEl = null;
 
 function clearColumnMarks() {
   $$('.col-drop-before, .col-drop-after').forEach((el) =>

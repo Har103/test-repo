@@ -317,6 +317,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-height: 16px;
   overflow-y: auto;
   min-height: 10px;
   flex: 1;
