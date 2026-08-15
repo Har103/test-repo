@@ -383,7 +383,22 @@ function card_comments(int $cardId): array
         JOIN users u ON u.id = cm.user_id
         WHERE cm.card_id = ? ORDER BY cm.created_at, cm.id');
     $s->execute([$cardId]);
-    return $s->fetchAll();
+    $comments = $s->fetchAll();
+
+    if ($comments) {
+        $ids = array_map('intval', array_column($comments, 'id'));
+        $in = implode(',', array_fill(0, count($ids), '?'));
+        $a = db()->prepare("SELECT * FROM attachments WHERE comment_id IN ($in) ORDER BY id");
+        $a->execute($ids);
+        $byComment = [];
+        foreach ($a->fetchAll() as $att) {
+            $byComment[(int) $att['comment_id']][] = $att;
+        }
+        foreach ($comments as &$c) {
+            $c['attachments'] = $byComment[(int) $c['id']] ?? [];
+        }
+    }
+    return $comments;
 }
 
 function add_comment(int $cardId, int $userId, string $bodyHtml): ?array
@@ -395,6 +410,32 @@ function add_comment(int $cardId, int $userId, string $bodyHtml): ?array
     if (html_to_plain($clean, 5000) === '') {
         return null;
     }
+    return insert_comment($cardId, $userId, $clean);
+}
+
+/**
+ * Create a comment together with an uploaded file. The body may be empty
+ * when a file is attached (the comment is still rendered via the file).
+ */
+function add_comment_upload(int $cardId, int $userId, string $bodyHtml, array $file): ?array
+{
+    if (fetch_card($cardId) === null) {
+        return null;
+    }
+    $clean = sanitize_html($bodyHtml);
+    if (html_to_plain($clean, 5000) === '' && $file['error'] !== UPLOAD_ERR_OK) {
+        return null;
+    }
+    $comment = insert_comment($cardId, $userId, $clean);
+    if ($comment === null) {
+        return null;
+    }
+    $att = store_attachment($cardId, $userId, $file, (int) $comment['id']);
+    return ['comment' => $comment, 'attachment' => $att];
+}
+
+function insert_comment(int $cardId, int $userId, string $clean): ?array
+{
     $stmt = db()->prepare('INSERT INTO comments (card_id, user_id, body_html) VALUES (?, ?, ?)');
     $stmt->execute([$cardId, $userId, $clean]);
     $s = db()->prepare('SELECT cm.*, u.username FROM comments cm JOIN users u ON u.id = cm.user_id WHERE cm.id = ?');
@@ -409,6 +450,11 @@ function delete_comment(int $commentId, int $userId): bool
     if ($s->fetch() === false) {
         return false;
     }
+    $s = db()->prepare('SELECT stored FROM attachments WHERE comment_id = ?');
+    $s->execute([$commentId]);
+    foreach ($s->fetchAll(PDO::FETCH_COLUMN) as $stored) {
+        @unlink(upload_dir() . '/' . $stored);
+    }
     db()->prepare('DELETE FROM comments WHERE id = ?')->execute([$commentId]);
     return true;
 }
@@ -417,6 +463,51 @@ function delete_comment(int $commentId, int $userId): bool
 
 const UPLOAD_DIR = 'uploads';
 const MAX_UPLOAD = 5 * 1024 * 1024; // 5 MB
+
+// MIME type -> stored extension. OOXML documents and zips may be detected
+// as application/zip by fileinfo, so the fallback below also maps a known
+// original extension back to its proper MIME.
+const MIME_EXT = [
+    'image/jpeg' => 'jpg',
+    'image/png'  => 'png',
+    'image/gif'  => 'gif',
+    'image/webp' => 'webp',
+    'application/pdf' => 'pdf',
+    'text/plain' => 'txt',
+    'text/csv'   => 'csv',
+    'application/json' => 'json',
+    'application/msword' => 'doc',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document' => 'docx',
+    'application/vnd.ms-excel' => 'xls',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' => 'xlsx',
+    'application/vnd.ms-powerpoint' => 'ppt',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation' => 'pptx',
+    'application/rtf' => 'rtf',
+    'application/zip' => 'zip',
+    'application/x-zip-compressed' => 'zip',
+    'application/gzip' => 'gz',
+    'application/x-tar' => 'tar',
+    'application/vnd.rar' => 'rar',
+    'application/x-rar-compressed' => 'rar',
+    'application/x-7z-compressed' => '7z',
+];
+
+const EXT_MIME = [
+    'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png',
+    'gif' => 'image/gif', 'webp' => 'image/webp',
+    'pdf' => 'application/pdf',
+    'txt' => 'text/plain', 'csv' => 'text/csv', 'json' => 'application/json',
+    'doc' => 'application/msword',
+    'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'xls' => 'application/vnd.ms-excel',
+    'xlsx' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'ppt' => 'application/vnd.ms-powerpoint',
+    'pptx' => 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'rtf' => 'application/rtf',
+    'zip' => 'application/zip',
+    'gz' => 'application/gzip', 'tar' => 'application/x-tar',
+    'rar' => 'application/vnd.rar', '7z' => 'application/x-7z-compressed',
+];
 
 function upload_dir(): string
 {
@@ -431,10 +522,17 @@ function ensure_upload_dir(): void
     }
 }
 
-function store_attachment(int $cardId, int $userId, array $file): ?array
+function store_attachment(int $cardId, int $userId, array $file, ?int $commentId = null): ?array
 {
     if (fetch_card($cardId) === null) {
         return null;
+    }
+    if ($commentId !== null) {
+        $ck = db()->prepare('SELECT id FROM comments WHERE id = ? AND card_id = ?');
+        $ck->execute([$commentId, $cardId]);
+        if ($ck->fetch() === false) {
+            send_error('Comment not found', 404);
+        }
     }
     if ($file['error'] !== UPLOAD_ERR_OK) {
         send_error('Upload failed', 422);
@@ -451,23 +549,28 @@ function store_attachment(int $cardId, int $userId, array $file): ?array
     if ($finfo) {
         finfo_close($finfo);
     }
-    if (!preg_match('#^(image/(jpeg|png|gif|webp)|application/pdf|text/plain|application/json)$#', $mime)) {
-        send_error('File type not allowed (images, PDF, text, JSON)', 422);
+
+    // fileinfo reports OOXML (docx/xlsx/pptx) as application/zip on some
+    // builds; trust the original extension to pick the right MIME then.
+    $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+    $extMime = EXT_MIME[$ext] ?? null;
+    if ($extMime !== null && in_array($mime, ['application/zip', 'application/octet-stream'], true)) {
+        $mime = $extMime;
     }
 
-    $ext = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/gif' => 'gif',
-            'image/webp' => 'webp', 'application/pdf' => 'pdf', 'text/plain' => 'txt',
-            'application/json' => 'json'][$mime] ?? 'bin';
+    if (!isset(MIME_EXT[$mime])) {
+        send_error('File type not allowed (images, documents, archives)', 422);
+    }
 
     ensure_upload_dir();
-    $stored = bin2hex(random_bytes(16)) . '.' . $ext;
+    $stored = bin2hex(random_bytes(16)) . '.' . MIME_EXT[$mime];
     if (!move_uploaded_file($file['tmp_name'], upload_dir() . '/' . $stored)) {
         send_error('Could not store file', 500);
     }
 
-    $stmt = db()->prepare('INSERT INTO attachments (card_id, user_id, name, stored, mime, size) VALUES (?, ?, ?, ?, ?, ?)');
+    $stmt = db()->prepare('INSERT INTO attachments (card_id, comment_id, user_id, name, stored, mime, size) VALUES (?, ?, ?, ?, ?, ?, ?)');
     $stmt->execute([
-        $cardId, $userId,
+        $cardId, $commentId, $userId,
         mb_substr(basename($file['name']), 0, 200),
         $stored, $mime, (int) $file['size'],
     ]);
@@ -502,7 +605,7 @@ function delete_attachment(int $attachmentId, int $userId): bool
 
 function card_attachments(int $cardId): array
 {
-    $s = db()->prepare('SELECT * FROM attachments WHERE card_id = ? ORDER BY created_at DESC, id DESC');
+    $s = db()->prepare('SELECT * FROM attachments WHERE card_id = ? AND comment_id IS NULL ORDER BY created_at DESC, id DESC');
     $s->execute([$cardId]);
     return $s->fetchAll();
 }

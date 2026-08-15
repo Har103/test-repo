@@ -26,7 +26,7 @@ echo <<<HTML
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Dockup · Boards</title>
-<link rel="stylesheet" href="{$base}/assets/style.css?v=20260816">
+<link rel="stylesheet" href="{$base}/assets/style.css?v=20260816b">
 <link rel="icon" href="data:,">
 </head>
 <body>
@@ -164,9 +164,12 @@ echo <<<HTML
               <button data-cmd="italic"><i>I</i></button>
               <button data-cmd="strikeThrough"><s>S</s></button>
               <button data-cmd="insertUnorderedList">•≡</button>
+              <span class="sep"></span>
+              <button type="button" id="cm-comment-attach" title="Attach a file">📎</button>
             </div>
             <div id="cm-comment-input" class="rich-editor comment-input" contenteditable="true"
                  data-placeholder="Write a comment…"></div>
+            <input id="cm-comment-file" type="file" class="hidden" accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,text/plain,text/csv,application/json,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/rtf,application/zip,application/x-zip-compressed,application/gzip,application/x-tar,application/vnd.rar,application/x-rar-compressed,application/x-7z-compressed,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.rtf,.zip,.rar,.7z,.gz,.tar,.csv">
             <div class="cm-foot">
               <button id="cm-save-comment" class="btn primary xs">Post comment</button>
             </div>
@@ -178,7 +181,7 @@ echo <<<HTML
             <h3>Add to card</h3>
             <button id="cm-add-label" class="btn ghost sm">🏷 Label</button>
             <button id="cm-attach-btn" class="btn ghost sm">🖼 Attachment</button>
-            <input id="cm-attach-file" type="file" class="hidden" accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,text/plain,application/json">
+            <input id="cm-attach-file" type="file" class="hidden" accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,text/plain,text/csv,application/json,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/rtf,application/zip,application/x-zip-compressed,application/gzip,application/x-tar,application/vnd.rar,application/x-rar-compressed,application/x-7z-compressed,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.rtf,.zip,.rar,.7z,.gz,.tar,.csv">
             <label class="cm-field"><span>Due date</span>
               <input id="cm-due" type="date">
             </label>
@@ -238,7 +241,7 @@ echo <<<HTML
 
 </div>
 
-<script src="{$base}/assets/app.js?v=20260816"></script>
+<script src="{$base}/assets/app.js?v=20260816b"></script>
 </body>
 </html>
 HTML;

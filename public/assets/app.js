@@ -50,7 +50,15 @@ const Api = {
   addChecklistItem: (cardId, text) => api('POST', `/api/cards/${cardId}/checklist`, { text }),
   updateChecklistItem: (id, patch) => api('PUT', `/api/checklist/${id}`, patch),
   deleteChecklistItem: (id) => api('DELETE', `/api/checklist/${id}`),
-  addComment: (cardId, body) => api('POST', `/api/cards/${cardId}/comments`, { body }),
+  addComment: (cardId, body, file) => {
+    if (file) {
+      const fd = new FormData();
+      fd.append('body', body);
+      fd.append('file', file);
+      return fetch(`${API_BASE}/api/cards/${cardId}/comments`, { method: 'POST', body: fd });
+    }
+    return api('POST', `/api/cards/${cardId}/comments`, { body });
+  },
   deleteComment: (id) => api('DELETE', `/api/comments/${id}`),
   deleteAttachment: (id) => api('DELETE', `/api/attachments/${id}`),
   upload: (cardId, file) => {
@@ -804,6 +812,18 @@ function renderComments(comments) {
   comments.forEach((c) => {
     const div = document.createElement('div');
     div.className = 'comment';
+    const atts = (c.attachments || []).map((a) => {
+      const url = `${API_BASE}/uploads/${a.stored}`;
+      return `
+        <div class="attachment sm">
+          <div class="file-icon">${a.mime.startsWith('image/') ? '🖼' : '📄'}</div>
+          <div class="attachment-meta">
+            <a href="${url}" target="_blank" rel="noopener">${escapeHtml(a.name)}</a>
+            <span>${(a.size / 1024).toFixed(0)} KB</span>
+          </div>
+          ${a.user_id === State.user.id ? `<button class="btn icon xs" data-att="${a.id}" title="Delete attachment">✕</button>` : ''}
+        </div>`;
+    }).join('');
     div.innerHTML = `
       <div class="comment-head">
         <span class="avatar sm" style="background:${hue(c.username)}">${escapeHtml(initials(c.username))}</span>
@@ -811,8 +831,9 @@ function renderComments(comments) {
         <span class="comment-time">${timeAgo(c.created_at)}</span>
         ${c.user_id === State.user.id ? '<button class="btn icon" title="Delete comment">✕</button>' : ''}
       </div>
-      <div class="comment-body">${c.body_html || ''}</div>`;
-    const del = div.querySelector('.btn');
+      ${c.body_html ? `<div class="comment-body">${c.body_html || ''}</div>` : ''}
+      ${atts ? `<div class="comment-attachments">${atts}</div>` : ''}`;
+    const del = div.querySelector('.comment-head .btn');
     if (del) {
       del.addEventListener('click', () => {
         if (confirm('Delete this comment?')) {
@@ -820,6 +841,13 @@ function renderComments(comments) {
         }
       });
     }
+    div.querySelectorAll('.comment-attachments .btn').forEach((b) => {
+      b.addEventListener('click', () => {
+        if (confirm('Delete this attachment?')) {
+          Api.deleteAttachment(Number(b.dataset.att)).catch((e) => showBanner(e.message));
+        }
+      });
+    });
     box.appendChild(div);
   });
 }
@@ -932,12 +960,19 @@ $('#cm-checklist-form').addEventListener('submit', (e) => {
 });
 
 /* comments */
+let pendingCommentFile = null;
+$('#cm-comment-attach').addEventListener('click', () => $('#cm-comment-file').click());
+$('#cm-comment-file').addEventListener('change', (e) => {
+  pendingCommentFile = e.target.files[0] || null;
+});
 $('#cm-save-comment').addEventListener('click', async () => {
   const body = $('#cm-comment-input').innerHTML;
-  if (!body || !body.replace(/<br>|<div><br><\/div>|\s/g, '')) return;
+  if ((!body || !body.replace(/<br>|<div><br><\/div>|\s/g, '')) && !pendingCommentFile) return;
   try {
-    await Api.addComment(State.currentCard.id, body);
+    await Api.addComment(State.currentCard.id, body, pendingCommentFile);
     $('#cm-comment-input').innerHTML = '';
+    $('#cm-comment-file').value = '';
+    pendingCommentFile = null;
   } catch (e) { showBanner(e.message); }
 });
 

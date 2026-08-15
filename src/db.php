@@ -148,6 +148,7 @@ function db_create_tables(PDO $pdo): void
     $pdo->exec("CREATE TABLE IF NOT EXISTS attachments (
         id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
         card_id    INT UNSIGNED NOT NULL,
+        comment_id INT UNSIGNED NULL,
         user_id    INT UNSIGNED NOT NULL,
         name       VARCHAR(255) NOT NULL,
         stored     VARCHAR(80)  NOT NULL,
@@ -155,8 +156,19 @@ function db_create_tables(PDO $pdo): void
         size       INT UNSIGNED NOT NULL DEFAULT 0,
         created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT fk_attachments_card FOREIGN KEY (card_id) REFERENCES cards(id) ON DELETE CASCADE,
+        CONSTRAINT fk_attachments_comment FOREIGN KEY (comment_id) REFERENCES comments(id) ON DELETE CASCADE,
         CONSTRAINT fk_attachments_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+    // In-place migration for databases created before comment attachments
+    // existed (schema version 4 added attachments.comment_id).
+    $cols = array_column($pdo->query("SHOW COLUMNS FROM attachments")->fetchAll(), 'Field');
+    if (!in_array('comment_id', $cols, true)) {
+        $pdo->exec("ALTER TABLE attachments
+            ADD COLUMN comment_id INT UNSIGNED NULL AFTER card_id,
+            ADD CONSTRAINT fk_attachments_comment FOREIGN KEY (comment_id)
+                REFERENCES comments(id) ON DELETE CASCADE");
+    }
 
     $pdo->exec("CREATE TABLE IF NOT EXISTS events (
         id         BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,

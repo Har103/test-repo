@@ -228,7 +228,22 @@ function api_dispatch(): void
         if ($method === 'POST' && $action === 'comments') {
             guard_mutation();
             $data = body();
-            $comment = add_comment($cardId, $userId, (string) opt_str($data, 'body', '', 20000));
+            // php://input is empty for multipart uploads; the text fields
+            // land in $_POST instead.
+            $bodyHtml = isset($_POST['body']) ? (string) $_POST['body'] : (string) opt_str($data, 'body', '', 20000);
+            $file = $_FILES['file'] ?? null;
+            if (is_array($file)) {
+                $res = add_comment_upload($cardId, $userId, $bodyHtml, $file);
+                if ($res) {
+                    record_event('comment.created', $boardId, ['comment' => $res['comment']]);
+                    if ($res['attachment']) {
+                        record_event('attachment.created', $boardId, ['attachment' => $res['attachment']]);
+                    }
+                    send_json(['ok' => true] + $res, 201);
+                }
+                send_error('Comment empty or card not found', 422);
+            }
+            $comment = add_comment($cardId, $userId, $bodyHtml);
             if ($comment) {
                 record_event('comment.created', $boardId, ['comment' => $comment]);
                 send_json(['ok' => true, 'comment' => $comment], 201);

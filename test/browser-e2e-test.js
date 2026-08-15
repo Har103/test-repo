@@ -217,6 +217,21 @@ const poll = async (fn, timeout = 10000, interval = 250) => {
   ok('comment posted', await poll(() => evalJs(`document.querySelectorAll('.comment').length >= 1`)));
   ok('comment rendered', (await evalJs(`document.querySelector('.comment-body').innerHTML`)).includes('<b>from</b>'));
 
+  // comment with a file attachment (zip)
+  const zipPath = path.join(__dirname, 'e2e-bundle.zip');
+  fs.writeFileSync(zipPath, Buffer.from([0x50, 0x4B, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00]));
+  const { result: docRes } = await cdpCall(ws, 94, 'DOM.getDocument', { depth: -1 });
+  const cfNode = await cdpCall(ws, 95, 'DOM.querySelector', { nodeId: docRes.root.nodeId, selector: '#cm-comment-file' });
+  await cdpCall(ws, 96, 'DOM.setFileInputFiles', { nodeId: cfNode.result.nodeId, files: [zipPath] });
+  await evalJs(`document.getElementById('cm-comment-input').innerHTML = 'zip attached comment'; true`);
+  await evalJs(`document.getElementById('cm-save-comment').click(); true`);
+  ok('comment with zip attachment posted', await poll(() => evalJs(`[...document.querySelectorAll('.comment')].some(c =>
+    (c.querySelector('.comment-body')?.textContent || '').includes('zip attached comment') &&
+    c.querySelector('.comment-attachments .attachment-meta a')?.textContent === 'e2e-bundle.zip')`), 8000));
+  const zipHref = await evalJs(`([...document.querySelectorAll('.comment-attachments .attachment-meta a')].map(a => a.href).find(h => h.endsWith('.zip')) || '')`);
+  ok('comment attachment served over HTTP', zipHref !== '' && (await httpGet(zipHref).then(() => true).catch(() => false)));
+
+
   // checklist
   await evalJs(`(() => {
     const el = document.getElementById('cm-checklist-input');
@@ -257,8 +272,12 @@ const poll = async (fn, timeout = 10000, interval = 250) => {
   const { result } = await cdpCall(ws, 99, 'DOM.getDocument', { depth: -1 });
   const nodeId = await cdpCall(ws, 100, 'DOM.querySelector', { nodeId: result.root.nodeId, selector: '#cm-attach-file' });
   await cdpCall(ws, 101, 'DOM.setFileInputFiles', { nodeId: nodeId.result.nodeId, files: [pngPath] });
-  ok('attachment uploaded + preview', await poll(() => evalJs(`document.querySelectorAll('.attachment img').length >= 1`), 8000));
+  ok('attachment uploaded + preview', await poll(() => evalJs(`document.querySelectorAll('#cm-attachments .attachment img').length >= 1`), 8000));
   fs.unlinkSync(pngPath);
+  const cardZipNode = await cdpCall(ws, 104, 'DOM.querySelector', { nodeId: result.root.nodeId, selector: '#cm-attach-file' });
+  await cdpCall(ws, 105, 'DOM.setFileInputFiles', { nodeId: cardZipNode.result.nodeId, files: [zipPath] });
+  ok('zip document attachment on card', await poll(() => evalJs(`[...document.querySelectorAll('#cm-attachments .attachment-meta a')].some(a => a.textContent === 'e2e-bundle.zip')`), 8000));
+  fs.unlinkSync(zipPath);
   await evalJs(`document.getElementById('card-modal').close(); true`);
 
   // --------------------- second tab realtime ----------------------
@@ -448,8 +467,16 @@ const poll = async (fn, timeout = 10000, interval = 250) => {
     ok('card modal still open after drag', await evalJs(`document.getElementById('card-modal').open`));
   }
 
-  await evalJs(`document.querySelector('.comment .btn.icon').click(); true`);
-  ok('comment deleted via UI', await poll(() => evalJs(`document.querySelectorAll('.comment').length === 0`), 8000));
+  while (await evalJs(`document.querySelectorAll('.comment-attachments .attachment').length`)) {
+    await evalJs(`document.querySelector('.comment-attachments .attachment .btn').click(); true`);
+    await sleep(400);
+  }
+  ok('comment attachments deleted via UI', await poll(() => evalJs(`document.querySelectorAll('.comment-attachments .attachment').length === 0`), 8000));
+  while (await evalJs(`document.querySelectorAll('.comment-head .btn').length`)) {
+    await evalJs(`document.querySelector('.comment-head .btn').click(); true`);
+    await sleep(400);
+  }
+  ok('comments deleted via UI', await poll(() => evalJs(`document.querySelectorAll('.comment').length === 0`), 8000));
   if ((await evalJs(`document.querySelectorAll('#cm-labels .lbl').length`)) === 0) {
     console.log('  [diag] modal on:', await evalJs(`document.getElementById('cm-board-name').textContent`));
     console.log('  [diag] modal open:', await evalJs(`document.getElementById('card-modal').open`));
@@ -463,8 +490,11 @@ const poll = async (fn, timeout = 10000, interval = 250) => {
   ok('label deleted via UI', await poll(() => evalJs(`document.querySelectorAll('#cm-labels .lbl').length === 0`), 8000));
   await evalJs(`document.querySelector('.cl-item .btn').click(); true`);
   ok('checklist item deleted via UI', await poll(() => evalJs(`document.querySelectorAll('.cl-item').length === 0`), 8000));
-  await evalJs(`document.querySelector('.attachment .btn').click(); true`);
-  ok('attachment deleted via UI', await poll(() => evalJs(`document.querySelectorAll('.attachment').length === 0`), 8000));
+  while (await evalJs(`document.querySelectorAll('#cm-attachments .attachment').length`)) {
+    await evalJs(`document.querySelector('#cm-attachments .attachment .btn').click(); true`);
+    await sleep(400);
+  }
+  ok('attachments deleted via UI', await poll(() => evalJs(`document.querySelectorAll('#cm-attachments .attachment').length === 0`), 8000));
   await evalJs(`document.getElementById('cm-delete').click(); true`);
   ok('card deleted via modal', await poll(() => evalJs(`!document.getElementById('card-modal').open && document.querySelectorAll('.card').length === 1 && ![...document.querySelectorAll('.card')].some(c => c.dataset.cardId === '${cardId}')`), 8000));
 
