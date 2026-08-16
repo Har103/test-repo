@@ -93,15 +93,71 @@ function auth_register(string $username, string $password): array
     return $user;
 }
 
+/**
+ * Brute-force throttle. Failed logins are counted per username AND per IP
+ * in the `login_attempts` table; MAX_ATTEMPTS failures in the window locks
+ * the bucket for LOCK_MINUTES. A locked bucket answers 429 before the
+ * password is even verified, and every failure also costs a small sleep so
+ * an attacker cannot hammer through quickly.
+ */
+const LOGIN_MAX_ATTEMPTS = 5;
+const LOGIN_MAX_ATTEMPTS_IP = 20;
+const LOGIN_LOCK_MINUTES = 15;
+
+function login_bucket(string $key): array
+{
+    $s = db()->prepare('SELECT attempts, locked_until FROM login_attempts WHERE bucket = ?');
+    $s->execute([$key]);
+    return $s->fetch(PDO::FETCH_ASSOC) ?: ['attempts' => 0, 'locked_until' => null];
+}
+
+function login_check_lockout(string $username): void
+{
+    $ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+    foreach ([login_bucket('u:' . mb_substr($username, 0, 40)), login_bucket('ip:' . mb_substr($ip, 0, 45))] as $row) {
+        if ($row['locked_until'] !== null && strtotime($row['locked_until']) > time()) {
+            send_error('Too many attempts. Try again later.', 429);
+        }
+    }
+}
+
+function login_record_failure(string $username): void
+{
+    $ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+    $buckets = [
+        ['u:' . mb_substr($username, 0, 40), LOGIN_MAX_ATTEMPTS],
+        ['ip:' . mb_substr($ip, 0, 45), LOGIN_MAX_ATTEMPTS_IP],
+    ];
+    foreach ($buckets as [$key, $max]) {
+        db()->prepare('INSERT INTO login_attempts (bucket, attempts) VALUES (?, 1)
+            ON DUPLICATE KEY UPDATE attempts = attempts + 1')->execute([$key]);
+        db()->prepare('UPDATE login_attempts SET locked_until = DATE_ADD(NOW(), INTERVAL ' . LOGIN_LOCK_MINUTES . ' MINUTE)
+            WHERE bucket = ? AND attempts >= ' . (int) $max)->execute([$key]);
+    }
+    usleep(250000); // every failure also costs a quarter second
+}
+
+function login_clear_failures(string $username): void
+{
+    $ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+    foreach (['u:' . mb_substr($username, 0, 40), 'ip:' . mb_substr($ip, 0, 45)] as $key) {
+        db()->prepare('DELETE FROM login_attempts WHERE bucket = ?')->execute([$key]);
+    }
+}
+
 function auth_login(string $username, string $password): ?array
 {
+    login_check_lockout($username);
+
     $stmt = db()->prepare('SELECT * FROM users WHERE username = ?');
     $stmt->execute([trim($username)]);
     $row = $stmt->fetch();
     if ($row === false || !password_verify($password, $row['password_hash'])) {
+        login_record_failure($username);
         return null;
     }
 
+    login_clear_failures($username);
     $user = ['id' => (int) $row['id'], 'username' => $row['username'], 'created_at' => $row['created_at']];
     auth_login_session($user);
     return $user;

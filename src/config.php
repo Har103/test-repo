@@ -26,9 +26,13 @@ $config = [
     ],
 
     // Rust WebSocket broadcast server (pure std, no libraries).
+    // The token must match BOARD_WS_TOKEN on the server side; without it
+    // /broadcast answers 401 so a random network client cannot inject
+    // forged events into every open board.
     'ws' => [
         'host' => env('WS_HOST', '127.0.0.1'),
         'port' => (int) env('WS_PORT', '9001'),
+        'token' => env('BOARD_WS_TOKEN', 'dockup-ws-dev-token'),
     ],
 
     'timezone' => 'UTC',

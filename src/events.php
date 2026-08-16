@@ -23,7 +23,9 @@ function ws_broadcast(string $payload): void
     $ctx = stream_context_create([
         'http' => [
             'method'        => 'POST',
-            'header'        => "Content-Type: application/json\r\nConnection: close\r\n",
+            'header'        => "Content-Type: application/json\r\n"
+                . 'Authorization: Bearer ' . config()['ws']['token'] . "\r\n"
+                . "Connection: close\r\n",
             'content'       => $payload,
             'timeout'       => 1,
             'ignore_errors' => true,

@@ -170,6 +170,13 @@ function db_create_tables(PDO $pdo): void
                 REFERENCES comments(id) ON DELETE CASCADE");
     }
 
+    $pdo->exec("CREATE TABLE IF NOT EXISTS login_attempts (
+        bucket       VARCHAR(96) PRIMARY KEY,
+        attempts     INT          NOT NULL DEFAULT 0,
+        locked_until DATETIME     NULL,
+        updated_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
     $pdo->exec("CREATE TABLE IF NOT EXISTS events (
         id         BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
         board_id   INT UNSIGNED NOT NULL DEFAULT 0,

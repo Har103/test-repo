@@ -27,6 +27,14 @@ CREATE TABLE IF NOT EXISTS cards (
     REFERENCES board_columns (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS login_attempts (
+  bucket       VARCHAR(96) PRIMARY KEY,
+  attempts     INT          NOT NULL DEFAULT 0,
+  locked_until DATETIME     NULL,
+  updated_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+                           ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS events (
   id         BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   type       VARCHAR(40)  NOT NULL,

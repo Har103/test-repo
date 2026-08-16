@@ -8,12 +8,24 @@
 //!   * HTTP 1.1 parsing              — upgrade + tiny JSON API
 //!
 //! Endpoints (single TCP port):
-//!   * `GET  /` with `Upgrade: websocket`  -> realtime WebSocket
+//!   * `GET  /` with `Upgrade: websocket`  -> realtime WebSocket (receive only)
 //!   * `POST /broadcast`                   -> fan a JSON payload to every client
 //!   * `GET  /status`                      -> {"clients": n, "uptime": s}
 //!
 //! The PHP app POSTs every mutation here; this server fans it out to all
 //! connected browsers over WebSocket.
+//!
+//! Security:
+//!   * `/broadcast` requires `Authorization: Bearer <token>` matching
+//!     `BOARD_WS_TOKEN` (default `dockup-ws-dev-token`). Without the token
+//!     the endpoint answers 401, so a random network client cannot inject
+//!     forged events into every open board.
+//!   * Browser text frames are no longer re-broadcast (only the private
+//!     ping/pong heartbeat remains), so a cross-site WebSocket cannot push
+//!     anything to other clients.
+//!   * If `BOARD_WS_ALLOWED_ORIGIN` is set, the WebSocket upgrade is refused
+//!     unless the Origin header matches it (or is absent, e.g. non-browser
+//!     clients).
 
 use std::collections::HashMap;
 use std::env;
@@ -26,6 +38,7 @@ use std::time::{Duration, Instant};
 
 const GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const READ_TIMEOUT: u64 = 300;
+const DEFAULT_TOKEN: &str = "dockup-ws-dev-token";
 
 type ClientId = usize;
 
@@ -105,6 +118,13 @@ fn main() {
         std::process::exit(1);
     });
 
+    let token = env::var("BOARD_WS_TOKEN").unwrap_or_else(|_| DEFAULT_TOKEN.to_string());
+    let allowed_origin = env::var("BOARD_WS_ALLOWED_ORIGIN").ok();
+    let auth = Arc::new(Auth {
+        token,
+        allowed_origin,
+    });
+
     let hub = Hub::new();
     println!("board_ws listening on {bind} (zero dependencies, pure std)");
 
@@ -112,16 +132,22 @@ fn main() {
         match conn {
             Ok(stream) => {
                 let hub = Arc::clone(&hub);
-                thread::spawn(move || handle_connection(stream, hub));
+                let auth = Arc::clone(&auth);
+                thread::spawn(move || handle_connection(stream, hub, auth));
             }
             Err(e) => eprintln!("accept failed: {e}"),
         }
     }
 }
 
+struct Auth {
+    token: String,
+    allowed_origin: Option<String>,
+}
+
 /* ------------------------------ HTTP ------------------------------ */
 
-fn handle_connection(mut stream: TcpStream, hub: Arc<Hub>) {
+fn handle_connection(mut stream: TcpStream, hub: Arc<Hub>, auth: Arc<Auth>) {
     stream
         .set_read_timeout(Some(Duration::from_secs(READ_TIMEOUT)))
         .ok();
@@ -165,6 +191,16 @@ fn handle_connection(mut stream: TcpStream, hub: Arc<Hub>) {
         .get("upgrade")
         .is_some_and(|v| v.to_ascii_lowercase() == "websocket")
     {
+        if let Some(allowed) = &auth.allowed_origin {
+            match headers.get("origin") {
+                Some(o) if o == allowed => {}
+                Some(_) => {
+                    let _ = stream.write_all(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+                    return;
+                }
+                None => {} // non-browser client without an Origin header
+            }
+        }
         let key = headers
             .get("sec-websocket-key")
             .cloned()
@@ -187,14 +223,16 @@ fn handle_connection(mut stream: TcpStream, hub: Arc<Hub>) {
     }
 
     // ---- plain HTTP API ----
-    http_request(stream, request_line, rest, hub);
+    http_request(stream, request_line, &headers, rest, hub, auth);
 }
 
 fn http_request(
     mut stream: TcpStream,
     request_line: &str,
+    headers: &HashMap<String, String>,
     rest: &[u8],
     hub: Arc<Hub>,
+    auth: Arc<Auth>,
 ) {
     let mut body: Vec<u8> = rest.to_vec();
 
@@ -221,10 +259,24 @@ fn http_request(
 
     let (status, ctype, payload): (&str, &str, Vec<u8>) = match (method, path) {
         ("POST", "/broadcast") => {
-            let text = String::from_utf8_lossy(&body).to_string();
-            println!("broadcast {} bytes to {} client(s)", text.len(), hub.count());
-            hub.broadcast(text.as_bytes());
-            ("200 OK", "application/json", b"{\"ok\":true}".to_vec())
+            let bearer = headers
+                .get("authorization")
+                .and_then(|v| v.strip_prefix("Bearer "))
+                .map(str::trim)
+                .unwrap_or("");
+            if bearer != auth.token {
+                println!("broadcast rejected: bad token");
+                (
+                    "401 Unauthorized",
+                    "application/json",
+                    b"{\"ok\":false,\"error\":\"unauthorized\"}".to_vec(),
+                )
+            } else {
+                let text = String::from_utf8_lossy(&body).to_string();
+                println!("broadcast {} bytes to {} client(s)", text.len(), hub.count());
+                hub.broadcast(text.as_bytes());
+                ("200 OK", "application/json", b"{\"ok\":true}".to_vec())
+            }
         }
         ("GET", "/status") => {
             let json = format!(
@@ -300,12 +352,13 @@ fn ws_loop(mut stream: TcpStream, leftover: &[u8], hub: Arc<Hub>) {
                     }
                     0xA => { /* pong: ignore */ }
                     0x1 | 0x0 => {
+                        // Text frames from browsers were historically
+                        // re-broadcast to everyone; that made a cross-site
+                        // WebSocket able to push forged events into every
+                        // open board. Only the private heartbeat remains.
                         let text = String::from_utf8_lossy(&payload).to_string();
                         if text == r#"{"type":"__ping"}"# {
                             hub.send_to(id, br#"{"type":"__pong"}"#);
-                        } else {
-                            // Any client text is broadcast to everyone.
-                            hub.broadcast(&payload);
                         }
                     }
                     _ => { /* unknown opcode: ignore */ }
