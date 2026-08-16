@@ -26,10 +26,11 @@ echo <<<HTML
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Dockup · Boards</title>
-<link rel="stylesheet" href="{$base}/assets/style.css?v=20260816b">
+<link rel="stylesheet" href="{$base}/assets/style.css?v=20260816c">
 <link rel="icon" href="data:,">
 </head>
 <body>
+<script>try { if (localStorage.getItem('dockup.theme') === 'dark') document.body.classList.add('dark'); } catch (e) {}</script>
 <script>window.APP_BASE = "{$base}"; window.CURRENT_USER = {$userJson};</script>
 
 <div id="banner" class="banner hidden"></div>
@@ -76,6 +77,7 @@ echo <<<HTML
       </div>
       <button id="btn-feed" class="btn ghost" title="Toggle live event feed">Feed</button>
       <button id="btn-settings" class="btn ghost" title="Transport settings">Transport</button>
+      <button id="theme-toggle" class="btn ghost" title="Toggle dark mode">☾</button>
       <div class="user-menu">
         <span class="avatar" id="avatar"></span>
         <span class="username" id="username"></span>
@@ -101,6 +103,7 @@ echo <<<HTML
         <button id="btn-rename-board" class="btn ghost sm">Rename</button>
         <button id="btn-seed" class="btn ghost sm" title="Add a demo board">Add demo board</button>
       </div>
+      <input id="card-search" type="search" placeholder="Filter cards…" autocomplete="off">
       <button id="btn-delete-board" class="btn ghost sm danger" title="Delete board">Delete</button>
     </div>
     <div id="board" class="board" aria-live="polite"></div>
@@ -241,7 +244,7 @@ echo <<<HTML
 
 </div>
 
-<script src="{$base}/assets/app.js?v=20260816b"></script>
+<script src="{$base}/assets/app.js?v=20260816c"></script>
 </body>
 </html>
 HTML;

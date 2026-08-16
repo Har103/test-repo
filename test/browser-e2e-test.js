@@ -268,6 +268,29 @@ const poll = async (fn, timeout = 10000, interval = 250) => {
   await evalJs(`document.getElementById('card-modal').close(); true`);
   ok('due date badge on card', (await evalJs(`[...document.querySelectorAll('.badge')].some(el => el.textContent.includes('2026-12-31'))`)));
 
+  // ------------------------ card search filter ----------------------
+  await evalJs(`window.prompt = () => 'Alpha Special'; true`);
+  await evalJs(`document.querySelector('.add-card').click(); true`);
+  await poll(() => evalJs(`document.querySelectorAll('.card').length >= 2`), 8000);
+  const setSearch = (v) => evalJs(`(() => {
+    const el = document.getElementById('card-search');
+    el.value = '${v}';
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  })()`);
+  await setSearch('special');
+  ok('search shows only matching card', await poll(() => evalJs(`(() => {
+    const vis = [...document.querySelectorAll('.card')].filter(c => !c.classList.contains('filtered-out'));
+    return vis.length === 1 && vis[0].querySelector('.card-title').textContent === 'Alpha Special';
+  })()`)));
+  await setSearch('zzzznope');
+  ok('search hides every card', await poll(() => evalJs(`(() => {
+    const cards = [...document.querySelectorAll('.card')];
+    return cards.length >= 2 && cards.every(c => c.classList.contains('filtered-out'));
+  })()`)));
+  await setSearch('');
+  ok('clearing search restores all cards', await poll(() => evalJs(`document.querySelectorAll('.card.filtered-out').length === 0`)));
+
   // description with rich toolbar
   await evalJs(`document.querySelector('.card').click(); true`);
   await sleep(400);
@@ -510,7 +533,7 @@ const poll = async (fn, timeout = 10000, interval = 250) => {
   }
   ok('attachments deleted via UI', await poll(() => evalJs(`document.querySelectorAll('#cm-attachments .attachment').length === 0`), 8000));
   await evalJs(`document.getElementById('cm-delete').click(); true`);
-  ok('card deleted via modal', await poll(() => evalJs(`!document.getElementById('card-modal').open && document.querySelectorAll('.card').length === 1 && ![...document.querySelectorAll('.card')].some(c => c.dataset.cardId === '${cardId}')`), 8000));
+  ok('card deleted via modal', await poll(() => evalJs(`!document.getElementById('card-modal').open && document.querySelectorAll('.card').length === 2 && ![...document.querySelectorAll('.card')].some(c => c.dataset.cardId === '${cardId}')`), 8000));
 
   await evalJs(`(() => {
     const col = [...document.querySelectorAll('.column')].find(c => c.querySelector('.col-title').textContent === 'Renamed Col');
@@ -565,6 +588,16 @@ const poll = async (fn, timeout = 10000, interval = 250) => {
     return true;
   })()`);
   ok('demo restored for next run', await poll(() => evalJs(`document.getElementById('username').textContent === 'demo'`), 8000));
+
+  // --------------------------- dark mode ----------------------------
+  ok('dark mode starts light', await evalJs(`!document.body.classList.contains('dark')`));
+  await evalJs(`document.getElementById('theme-toggle').click(); true`);
+  ok('theme toggle switches to dark', await poll(() => evalJs(`document.body.classList.contains('dark') && localStorage.getItem('dockup.theme') === 'dark'`)));
+  await evalJs(`location.reload(); true`);
+  await sleep(2500);
+  ok('dark mode persists after reload', await poll(() => evalJs(`document.body.classList.contains('dark')`), 8000));
+  await evalJs(`document.getElementById('theme-toggle').click(); true`);
+  ok('theme toggle back to light', await poll(() => evalJs(`!document.body.classList.contains('dark') && localStorage.getItem('dockup.theme') === 'light'`), 8000));
 
   // --------------------------- cleanup ----------------------------
   if (testBoardId) {

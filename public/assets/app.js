@@ -445,7 +445,17 @@ function renderBoard() {
   // existing element to the end, so re-appending in sorted order fixes
   // the layout after a column drag/reorder.
   board.columns.forEach((col) => boardEl.appendChild($(`#col-${col.id}`)));
+  applyCardFilter();
 }
+
+function applyCardFilter() {
+  const q = ($('#card-search')?.value || '').trim().toLowerCase();
+  document.querySelectorAll('#board .card').forEach((node) => {
+    node.classList.toggle('filtered-out', q !== '' && !(node.dataset.search || '').includes(q));
+  });
+}
+
+$('#card-search')?.addEventListener('input', applyCardFilter);
 
 function renderColumn(el, col) {
   el.dataset.columnId = col.id;
@@ -474,6 +484,7 @@ function renderColumn(el, col) {
 
 function renderCard(node, card) {
   node.dataset.cardId = card.id;
+  node.dataset.search = (card.title + ' ' + (card.note || '')).toLowerCase();
   const labels = (card.labels || []).map((l) =>
     `<span class="lbl" style="background:${l.color}">${escapeHtml(l.text)}</span>`).join('');
 
@@ -1174,6 +1185,19 @@ $('#btn-apply-settings')?.addEventListener('click', () => {
 });
 
 $('#btn-settings')?.addEventListener('click', openSettings);
+
+/* ---------------------------- dark mode --------------------------- */
+
+function applyTheme(dark) {
+  document.body.classList.toggle('dark', dark);
+  $('#theme-toggle').textContent = dark ? '☀' : '☾';
+}
+
+$('#theme-toggle')?.addEventListener('click', () => {
+  const dark = !document.body.classList.contains('dark');
+  applyTheme(dark);
+  try { localStorage.setItem('dockup.theme', dark ? 'dark' : 'light'); } catch (e) {}
+});
 
 /* ------------------------------ boot ----------------------------- */
 

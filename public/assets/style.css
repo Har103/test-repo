@@ -640,6 +640,59 @@ body.col-dragging { cursor: grabbing; user-select: none; }
 .cm-field span { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
 .cm-field input { margin-bottom: 0; }
 
+/* --------------------------- dark theme --------------------------- */
+
+body.dark {
+  color-scheme: dark;
+  --bg: #0f172a;
+  --surface: #1e293b;
+  --border: #334155;
+  --text: #e2e8f0;
+  --muted: #94a3b8;
+  --primary: #10b981;
+  --primary-dark: #059669;
+  --shadow: 0 1px 3px rgba(0, 0, 0, .4), 0 4px 12px rgba(0, 0, 0, .3);
+}
+
+body.dark .btn:hover { background: #334155; }
+body.dark .btn.ghost.active { background: #334155; }
+body.dark .btn.danger { border-color: rgba(220, 38, 38, .45); }
+body.dark .btn.danger:hover { background: rgba(220, 38, 38, .15); }
+body.dark .btn.icon:hover { background: #334155; }
+body.dark .auth-demo code { background: #334155; }
+body.dark .column { background: var(--surface); }
+body.dark .col-count { background: #334155; }
+body.dark .radio:hover { background: #334155; }
+body.dark .cm-title:hover, body.dark .cm-title:focus { background: #334155; }
+body.dark .editor-toolbar { background: #334155; }
+body.dark .editor-toolbar button:hover { background: #475569; }
+body.dark .cl-progress-bar { background: #334155; }
+body.dark .attachment img, body.dark .attachment .file-icon { background: #334155; }
+body.dark .comment-body { background: #263449; }
+body.dark .comment-attachments .attachment.sm { background: #263449; }
+body.dark .feed li { border-bottom-color: #334155; }
+body.dark .rich-editor blockquote { border-left-color: #475569; }
+body.dark .modal input[type="text"],
+body.dark .modal input[type="password"],
+body.dark .modal input[type="date"],
+body.dark #card-search { background: #0f172a; color: var(--text); }
+
+/* card search box */
+
+#card-search {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  background: var(--surface);
+  color: var(--text);
+  width: 220px;
+  max-width: 30vw;
+}
+#card-search:focus { outline: 2px solid var(--primary); outline-offset: -1px; }
+
+.card.filtered-out { display: none !important; }
+
 /* ------------------------------- feed ----------------------------- */
 
 .feed {
