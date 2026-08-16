@@ -144,6 +144,8 @@ Then log in, open a board, open a **second tab**, and watch it sync.
   - Login brute-force lockout: 5 failed attempts per username (20 per IP)
     locks that account for 15 minutes (429), plus a 250 ms penalty sleep
     per failure
+  - Registration throttling: max 10 new accounts per IP per hour, then a
+    1-hour 429 lockout (window auto-resets after expiry)
   - HTML sanitizer (DOMDocument allowlist) on all rich text — stripped of
     scripts, handlers, `javascript:` URLs, `style`, and unwrap-bypass
     vectors; comment nodes removed; fallback regex pass if the DOM is gone
@@ -173,8 +175,9 @@ php test/sanitize-test.php       # HTML sanitizer unit tests incl. unwrap-bypass
 
 Requirements: Apache + MariaDB running, Rust `board_ws` on :9001,
 `dockerup_board` database reachable (port 3307 in this dev environment).
-The API suite clears its own `login_attempts` lockout rows after the
-lockout check so the per-IP counter never accumulates across runs.
+The API suite clears its own throttle buckets (`login_attempts`) before and
+after the lockout / registration-throttle checks — including a self-heal
+on startup — so the per-IP counters never accumulate across runs.
 
 ## Rust server API
 

@@ -71,6 +71,11 @@ function guard_mutation(): void
 
 function auth_register(string $username, string $password): array
 {
+    $ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+    if (throttle_bump('reg:' . mb_substr($ip, 0, 45), REGISTER_MAX_PER_HOUR, 60)) {
+        send_error('Too many registrations from this address. Try again later.', 429);
+    }
+
     $username = trim($username);
     if (!preg_match('/^[a-zA-Z0-9_.-]{3,30}$/', $username)) {
         send_error('Username: 3–30 chars, letters, digits, . _ - only', 422);
@@ -103,6 +108,40 @@ function auth_register(string $username, string $password): array
 const LOGIN_MAX_ATTEMPTS = 5;
 const LOGIN_MAX_ATTEMPTS_IP = 20;
 const LOGIN_LOCK_MINUTES = 15;
+const REGISTER_MAX_PER_HOUR = 10;
+
+/**
+ * Shared rate bucket in the login_attempts table. Counts hits; when the
+ * counter reaches $max the bucket locks for the window. After the window
+ * expires the next hit resets the counter so a fresh window starts
+ * (unlike the login lockout, where a hit while locked only extends the
+ * lock while the attacker keeps failing).
+ */
+function throttle_bump(string $key, int $max, int $windowMinutes): bool
+{
+    $pdo = db();
+    $pdo->prepare('INSERT INTO login_attempts (bucket, attempts, locked_until) VALUES (?, 1, NULL)
+        ON DUPLICATE KEY UPDATE attempts = IF(locked_until IS NOT NULL AND locked_until > NOW(), attempts, attempts + 1)')
+        ->execute([$key]);
+    $s = $pdo->prepare('SELECT attempts, locked_until FROM login_attempts WHERE bucket = ?');
+    $s->execute([$key]);
+    $row = $s->fetch(PDO::FETCH_ASSOC);
+
+    if ($row['locked_until'] !== null && strtotime($row['locked_until']) > time()) {
+        return true; // locked
+    }
+    if ((int) $row['attempts'] >= $max) {
+        if ($row['locked_until'] === null) {
+            // just hit the cap — start the lock window; this hit is allowed
+            $pdo->prepare('UPDATE login_attempts SET locked_until = DATE_ADD(NOW(), INTERVAL ' . (int) $windowMinutes . ' MINUTE) WHERE bucket = ?')->execute([$key]);
+            return false;
+        }
+        // window expired but the counter is still high — start a fresh window
+        $pdo->prepare('UPDATE login_attempts SET attempts = 1, locked_until = NULL WHERE bucket = ?')->execute([$key]);
+        return false;
+    }
+    return false;
+}
 
 function login_bucket(string $key): array
 {

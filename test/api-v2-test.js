@@ -39,6 +39,12 @@ const step = (name, fn) => Promise.resolve().then(fn).then(() => console.log('  
 (async () => {
   console.log(`== v2 API test (user ${UNIQ}) ==`);
 
+  // Self-heal: a previously crashed run can leave throttle buckets locked
+  // (the register bucket would 429 the very first register below). Reset
+  // all auth-rate state before touching the API.
+  require('child_process').execFileSync('C:/wamp64/bin/php/php8.4.0/php.exe', ['-r',
+    `require ${JSON.stringify(path.join(__dirname, '..', 'src', 'db.php'))}; db()->exec('DELETE FROM login_attempts');`]);
+
   await step('health', async () => {
     const h = await j('GET', '/api/health');
     if (!h.ok || !h.wsUrl) throw new Error('bad health payload');
@@ -89,6 +95,30 @@ const step = (name, fn) => Promise.resolve().then(fn).then(() => console.log('  
     if (!r2.user || r2.user.username !== rl) throw new Error('unlock failed');
     const r3 = await j('POST', '/api/auth/login', { username: UNIQ, password: 'secret1' });
     if (r3.user.username !== UNIQ) throw new Error('cookie restore failed');
+  });
+
+  await step('register throttle (10/hour/IP -> 429, then window resets)', async () => {
+    const execFileSync = require('child_process').execFileSync;
+    const php = (code) => execFileSync('C:/wamp64/bin/php/php8.4.0/php.exe', ['-r',
+      `require ${JSON.stringify(path.join(__dirname, '..', 'src', 'db.php'))}; ${code}`]);
+    try {
+      // Fresh start: the bucket must be empty so we know the exact count.
+      php("db()->exec('DELETE FROM login_attempts');");
+      const base = 'spam' + Date.now().toString(36);
+      for (let i = 0; i < 10; i++) {
+        await j('POST', '/api/auth/register', { username: base + '_' + i, password: 'secret1' });
+      }
+      try { await j('POST', '/api/auth/register', { username: base + '_10', password: 'secret1' }); throw new Error('expected 429'); }
+      catch (e) { if (!/429/.test(e.message)) throw e; }
+      // Clear all throttle state so the rest of this run — and the other
+      // suites — can keep registering.
+      php("db()->exec('DELETE FROM login_attempts');");
+      const ok = await j('POST', '/api/auth/register', { username: base + '_11', password: 'secret1' });
+      if (!ok.user || ok.user.username !== base + '_11') throw new Error('register after cleanup failed');
+    } finally {
+      const r = await j('POST', '/api/auth/login', { username: UNIQ, password: 'secret1' });
+      if (r.user.username !== UNIQ) throw new Error('cookie restore failed');
+    }
   });
 
   let boardId, colA, colB, cardId, labelId, itemId, commentId, zipCommentId, xssCommentId, attId;
