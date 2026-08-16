@@ -74,6 +74,13 @@ cargo run --release            # binds 0.0.0.0:9001
 # or a different port:  cargo run --release -- 9002
 ```
 
+Env vars:
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `BOARD_WS_TOKEN` | `dockup-ws-dev-token` | Shared secret the PHP app must send as `Authorization: Bearer …` on `POST /broadcast`; requests without it get **401**. |
+| `BOARD_WS_ALLOWED_ORIGIN` | *(unset)* | When set, WebSocket upgrades from a different `Origin` are refused (403). Leave unset to allow any origin (e.g. desktop clients). |
+
 Set `WS_HOST` / `WS_PORT` in the PHP environment if you change the port.
 
 ### 3. PHP app
@@ -117,38 +124,64 @@ Then log in, open a board, open a **second tab**, and watch it sync.
   by an allowlist HTML sanitizer (DOMDocument)
 - **Labels** (colored chips), **checklist** with progress bar, **due dates**
   (overdue highlighting)
-- **Comments** (rich text, delete your own)
+- **Comments** (rich text, delete your own) — **with file attachments**
 - **Attachments**: image previews (PNG/JPEG/GIF/WebP) + PDF/txt/json,
+  documents and archives (doc/docx/xls/xlsx/ppt/pptx/rtf/zip/rar/7z/gz/tar/csv),
   5 MB cap, MIME sniffed with `finfo`
+- **Dark mode**: ☾/☀ toggle in the topbar, persisted per browser
+  (`localStorage`), applied before first paint (no flash)
+- **Card search**: `Filter cards…` box in the board toolbar — client-side,
+  matches title + description, re-applied after every live update
 - **Live sync** across tabs/browsers via SSE **or** WebSocket —
   switchable in *Settings* without reloading the page
 - Live event feed panel showing every mutation as it happens
 - Connection status indicator + connected-client count (WS)
 - Auto-reconnect on both transports; event catch-up after a tab reconnects
 - `Add demo board` seeds a sample board so you can play immediately
-- CSRF protection: state-changing requests must be same-origin
-  (Origin / Sec-Fetch-Site check)
+- **Security**:
+  - CSRF protection: state-changing requests must be same-origin
+    (Origin / Sec-Fetch-Site check)
+  - Login brute-force lockout: 5 failed attempts per username (20 per IP)
+    locks that account for 15 minutes (429), plus a 250 ms penalty sleep
+    per failure
+  - HTML sanitizer (DOMDocument allowlist) on all rich text — stripped of
+    scripts, handlers, `javascript:` URLs, `style`, and unwrap-bypass
+    vectors; comment nodes removed; fallback regex pass if the DOM is gone
+  - Usernames locked to `[a-zA-Z0-9_.-]{3,30}`; `Host` header clamped on
+    `/api/health`
+  - HTTP hardening headers: `X-Content-Type-Options: nosniff`,
+    `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`
+  - `uploads/` is protected by its own `.htaccess` (PHP engines disabled,
+    PHP-family extensions denied)
+  - Rust WS server: `/broadcast` requires the shared token, client text
+    frames are **never** re-broadcast (only a private ping/pong heartbeat),
+    optional Origin allowlist on upgrade
 
 ## Tests
 
 ```
-node test/api-v2-test.js         # full API: auth, CRUD, sanitizer, uploads, SSE
+node test/api-v2-test.js         # full API: auth, lockout, CRUD, sanitizer,
+                                 # uploads, SSE
 node test/browser-e2e-test.js    # real Edge headless via CDP: login, boards,
                                  # card modal, comments, checklist, labels,
-                                 # upload, realtime over SSE **and** WS
-node test/ws-e2e-test.js         # raw WS clients + Rust broadcast fan-out
-php test/sanitize-test.php       # HTML sanitizer unit tests
+                                 # upload, search, dark mode, realtime SSE+WS
+node test/ws-e2e-test.js         # raw WS clients + Rust broadcast fan-out +
+                                 # security contract (401 without token,
+                                 # no client echo, evil Origin refused)
+php test/sanitize-test.php       # HTML sanitizer unit tests incl. unwrap-bypass
 ```
 
 Requirements: Apache + MariaDB running, Rust `board_ws` on :9001,
 `dockerup_board` database reachable (port 3307 in this dev environment).
+The API suite clears its own `login_attempts` lockout rows after the
+lockout check so the per-IP counter never accumulates across runs.
 
 ## Rust server API
 
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /` (Upgrade: websocket) | realtime client connection |
-| `POST /broadcast` | body JSON is fanned out to every WS client (used by PHP) |
+| `GET /` (Upgrade: websocket) | realtime client connection (optional Origin allowlist) |
+| `POST /broadcast` | body JSON is fanned out to every WS client (used by PHP); requires `Authorization: Bearer <BOARD_WS_TOKEN>` |
 | `GET /status` | `{"clients": n, "uptime": s}` |
 
 The Rust binary contains no external crates: SHA-1 (RFC 3174), base64,

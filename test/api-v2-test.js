@@ -71,6 +71,26 @@ const step = (name, fn) => Promise.resolve().then(fn).then(() => console.log('  
     if (r.user.username !== UNIQ) throw new Error('wrong user');
   });
 
+  await step('brute-force lockout (5 fails -> 429, then unlock)', async () => {
+    const execFileSync = require('child_process').execFileSync;
+    const rl = 'rl' + Date.now().toString(36);
+    await j('POST', '/api/auth/register', { username: rl, password: 'secret1' });
+    for (let i = 0; i < 5; i++) {
+      try { await j('POST', '/api/auth/login', { username: rl, password: 'wrong' }); throw new Error('expected 401'); }
+      catch (e) { if (!/401/.test(e.message)) throw e; }
+    }
+    try { await j('POST', '/api/auth/login', { username: rl, password: 'secret1' }); throw new Error('expected 429'); }
+    catch (e) { if (!/429/.test(e.message)) throw e; }
+    // The lockout buckets are anti-abuse state only — clear them so the
+    // per-IP counter cannot accumulate toward the threshold across runs.
+    execFileSync('C:/wamp64/bin/php/php8.4.0/php.exe', ['-r',
+      `require ${JSON.stringify(path.join(__dirname, '..', 'src', 'db.php'))}; db()->exec('DELETE FROM login_attempts');`]);
+    const r2 = await j('POST', '/api/auth/login', { username: rl, password: 'secret1' });
+    if (!r2.user || r2.user.username !== rl) throw new Error('unlock failed');
+    const r3 = await j('POST', '/api/auth/login', { username: UNIQ, password: 'secret1' });
+    if (r3.user.username !== UNIQ) throw new Error('cookie restore failed');
+  });
+
   let boardId, colA, colB, cardId, labelId, itemId, commentId, zipCommentId, xssCommentId, attId;
 
   await step('boards list empty', async () => {
