@@ -46,6 +46,7 @@ function api_dispatch(): void
     /* ---------------------------- health --------------------------- */
 
     if ($method === 'GET' && $seg === ['api', 'health']) {
+        ws_ensure_running(); // boot the Rust server on demand if it is down
         $ws = @fsockopen(config()['ws']['host'], config()['ws']['port'], $ec, $es, 0.4);
         $host = $_SERVER['HTTP_HOST'] ?? null;
         if ($host !== null) {

@@ -74,14 +74,28 @@ cargo run --release            # binds 0.0.0.0:9001
 # or a different port:  cargo run --release -- 9002
 ```
 
-Env vars:
+**PHP auto-starts the server when it is not running** (checked on every
+`/api/health` call and before every broadcast): it spawns
+`server/target/release/board_ws.exe` with the token/origin passed as CLI
+args, so after a reboot the WebSocket transport heals itself. Build it
+once (`cargo build --release`), then PHP takes care of the rest.
+Disable with `WS_AUTO_START=0`.
+
+Env vars (PHP side):
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `BOARD_WS_TOKEN` | `dockup-ws-dev-token` | Shared secret the PHP app must send as `Authorization: Bearer …` on `POST /broadcast`; requests without it get **401**. |
-| `BOARD_WS_ALLOWED_ORIGIN` | *(unset)* | When set, WebSocket upgrades from a different `Origin` are refused (403). Leave unset to allow any origin (e.g. desktop clients). |
+| `WS_HOST` / `WS_PORT` | `127.0.0.1` / `9001` | where PHP finds the server |
+| `BOARD_WS_TOKEN` | `dockup-ws-dev-token` | shared secret PHP sends as `Authorization: Bearer …` on `POST /broadcast`; requests without it get **401** |
+| `BOARD_WS_ALLOWED_ORIGIN` | `http://localhost` | when set, WebSocket upgrades from a different `Origin` are refused (403). Empty = allow any origin (e.g. desktop clients). |
+| `WS_AUTO_START` | `1` | set `0` to never spawn the server from PHP |
 
-Set `WS_HOST` / `WS_PORT` in the PHP environment if you change the port.
+Rust binary (env vars `BOARD_WS_TOKEN` / `BOARD_WS_ALLOWED_ORIGIN` still
+work; CLI args override them):
+
+```sh
+board_ws [PORT] [--token <t>] [--origin <o>]
+```
 
 ### 3. PHP app
 

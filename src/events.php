@@ -18,8 +18,75 @@ function ws_url(string $path = '/broadcast'): string
     return sprintf('http://%s:%d%s', $c['host'], $c['port'], $path);
 }
 
+function ws_alive(): bool
+{
+    $ctx = stream_context_create([
+        'http' => ['method' => 'GET', 'timeout' => 0.4, 'ignore_errors' => true],
+    ]);
+    $body = @file_get_contents(ws_url('/status'), false, $ctx);
+    if ($body === false) {
+        return false;
+    }
+    $j = json_decode($body, true);
+    return is_array($j) && isset($j['clients']);
+}
+
+/**
+ * Boot the Rust broadcast server if it is not running (e.g. after a
+ * reboot). Called on /api/health and before every broadcast, so the
+ * WebSocket transport heals itself. Disable with WS_AUTO_START=0.
+ */
+function ws_ensure_running(): void
+{
+    static $attempted = false;
+    if ($attempted) {
+        return;
+    }
+    $attempted = true;
+
+    $ws = config()['ws'];
+    if (!$ws['auto_start'] || ws_alive()) {
+        return;
+    }
+
+    $exe = dirname(__DIR__) . '/server/target/release/board_ws.exe';
+    if (!is_file($exe)) {
+        error_log('ws_ensure_running: board_ws.exe not found at ' . $exe);
+        return;
+    }
+
+    $origin = $ws['origin'];
+    $cmd = [$exe, (string) $ws['port'], '--token', $ws['token']];
+    if ($origin !== '') {
+        $cmd[] = '--origin';
+        $cmd[] = $origin;
+    }
+
+    // Array command form = no cmd.exe involved, so no shell quoting and no
+    // inherited stdout/stderr pipes — the request must not block on the
+    // detached server. Logs go to per-port files (gitignored). The process
+    // handle is deliberately never closed: closing would wait for
+    // termination.
+    $root = dirname(__DIR__);
+    @proc_open($cmd, [
+        0 => ['file', 'NUL', 'r'],
+        1 => ['file', $root . '\ws-server-' . (int) $ws['port'] . '.log', 'a'],
+        2 => ['file', $root . '\ws-server-' . (int) $ws['port'] . '.err.log', 'a'],
+    ], $pipes);
+
+    // Give the binary a moment to bind before the caller proceeds.
+    for ($i = 0; $i < 20; $i++) {
+        if (ws_alive()) {
+            return;
+        }
+        usleep(100000);
+    }
+    error_log('ws_ensure_running: spawned but /status never came up');
+}
+
 function ws_broadcast(string $payload): void
 {
+    ws_ensure_running();
     $ctx = stream_context_create([
         'http' => [
             'method'        => 'POST',

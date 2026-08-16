@@ -108,18 +108,34 @@ impl Hub {
 }
 
 fn main() {
-    let port = env::args()
-        .nth(1)
-        .and_then(|a| a.parse::<u16>().ok())
-        .unwrap_or(9001);
+    // Usage: board_ws [PORT] [--token <t>] [--origin <o>]
+    // CLI args override the BOARD_WS_TOKEN / BOARD_WS_ALLOWED_ORIGIN env
+    // vars — PHP uses the args form when it auto-starts the server.
+    let mut args = env::args().skip(1);
+    let mut port = 9001u16;
+    let mut cli_token: Option<String> = None;
+    let mut cli_origin: Option<String> = None;
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--token" => cli_token = args.next(),
+            "--origin" => cli_origin = args.next(),
+            _ => {
+                if let Ok(p) = a.parse::<u16>() {
+                    port = p;
+                }
+            }
+        }
+    }
     let bind = format!("0.0.0.0:{}", port);
     let listener = TcpListener::bind(&bind).unwrap_or_else(|e| {
         eprintln!("could not bind {bind}: {e}");
         std::process::exit(1);
     });
 
-    let token = env::var("BOARD_WS_TOKEN").unwrap_or_else(|_| DEFAULT_TOKEN.to_string());
-    let allowed_origin = env::var("BOARD_WS_ALLOWED_ORIGIN").ok();
+    let token = cli_token
+        .or_else(|| env::var("BOARD_WS_TOKEN").ok())
+        .unwrap_or_else(|| DEFAULT_TOKEN.to_string());
+    let allowed_origin = cli_origin.or_else(|| env::var("BOARD_WS_ALLOWED_ORIGIN").ok());
     let auth = Arc::new(Auth {
         token,
         allowed_origin,

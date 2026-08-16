@@ -33,6 +33,16 @@ $config = [
         'host' => env('WS_HOST', '127.0.0.1'),
         'port' => (int) env('WS_PORT', '9001'),
         'token' => env('BOARD_WS_TOKEN', 'dockup-ws-dev-token'),
+        // Origin allowlist passed to the Rust server (empty = allow any
+        // origin). When PHP auto-starts the server it hands this over as
+        // the --origin CLI arg. Defaults to localhost so the common
+        // single-machine deployment keeps the upgrade gate; set it to your
+        // real origin (or empty) for other setups.
+        'origin' => env('BOARD_WS_ALLOWED_ORIGIN', 'http://localhost'),
+        // PHP checks /status and spawns server/target/release/board_ws.exe
+        // itself if the server is not running (health checks + every
+        // broadcast). Set WS_AUTO_START=0 to disable.
+        'auto_start' => env('WS_AUTO_START', '1') === '1',
     ],
 
     'timezone' => 'UTC',
