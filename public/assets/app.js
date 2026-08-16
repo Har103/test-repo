@@ -14,8 +14,12 @@ const API_BASE = (window.APP_BASE || '').replace(/\/+$/, '');
 async function api(method, path, body) {
   const opts = { method, headers: {} };
   if (body !== undefined) {
-    opts.headers['Content-Type'] = 'application/json';
-    opts.body = JSON.stringify(body);
+    if (body instanceof FormData) {
+      opts.body = body;
+    } else {
+      opts.headers['Content-Type'] = 'application/json';
+      opts.body = JSON.stringify(body);
+    }
   }
   const res = await fetch(`${API_BASE}${path}`, opts);
   let data = {};
@@ -71,6 +75,17 @@ const Api = {
         return data;
       });
   },
+  uploadStart: (name, size) => api('POST', '/api/uploads/start', { name, size }),
+  uploadChunk: (fileId, index, chunk) => {
+    const fd = new FormData();
+    fd.append('fileId', fileId);
+    fd.append('index', String(index));
+    fd.append('chunk', chunk);
+    return api('POST', '/api/uploads/chunk', fd);
+  },
+  abortUpload: (fileId) => api('POST', '/api/uploads/abort', { fileId }),
+  attachCardFile: (cardId, fileId) => api('POST', `/api/cards/${cardId}/attachments`, { fileId }),
+  addCommentWithFileId: (cardId, body, fileId) => api('POST', `/api/cards/${cardId}/comments`, { body, fileId }),
 };
 
 /* ----------------------------- utils ----------------------------- */
@@ -816,6 +831,38 @@ function renderChecklist(items) {
   });
 }
 
+/* ---------------------------- file icons -------------------------- */
+
+// Per-type document icon: an inline SVG file shape with the extension
+// label. No binary icon packs — covers every type (including unknown
+// ones) and matches the app's zero-dependency style.
+function fileIcon(mime, name) {
+  const ext = escapeHtml((name.split('.').pop() || '').toUpperCase().slice(0, 4));
+  let label = ext || 'FILE';
+  let color = '#475569';
+  const table = [
+    [/pdf/, 'PDF', '#dc2626'],
+    [/zip|rar|7z|tar|gzip|compress|archive/, 'ZIP', '#d97706'],
+    [/word|rtf|wordprocessing/, 'DOC', '#2563eb'],
+    [/excel|spreadsheet/, 'XLS', '#059669'],
+    [/powerpoint|presentation/, 'PPT', '#ea580c'],
+    [/^text\/|json|csv/, 'TXT', '#64748b'],
+    [/^audio\//, 'AUD', '#7c3aed'],
+    [/^video\//, 'VID', '#0891b2'],
+    [/octet-stream|exe$|^application\//, 'EXE', '#334155'],
+  ];
+  for (const [re, l, c] of table) {
+    if (re.test(mime)) { label = l; color = c; break; }
+  }
+  const fs = label.length > 3 ? 25 : 31;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 60" role="img" aria-label="${label} file">
+    <rect width="48" height="60" rx="6" fill="${color}"/>
+    <path d="M30 0 L48 18 L48 0 Z" fill="rgba(255,255,255,.32)"/>
+    <text x="24" y="40" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif"
+          font-size="${fs}" font-weight="700" fill="#fff">${label}</text>
+  </svg>`;
+}
+
 function renderComments(comments) {
   const box = $('#cm-comments');
   box.innerHTML = '';
@@ -825,9 +872,12 @@ function renderComments(comments) {
     div.className = 'comment';
     const atts = (c.attachments || []).map((a) => {
       const url = `${API_BASE}/uploads/${a.stored}`;
+      const preview = a.mime.startsWith('image/')
+        ? `<a href="${url}" target="_blank" rel="noopener" title="${escapeHtml(a.name)}"><img src="${url}" alt="${escapeHtml(a.name)}" loading="lazy"></a>`
+        : `<div class="file-icon">${fileIcon(a.mime, a.name)}</div>`;
       return `
         <div class="attachment sm">
-          <div class="file-icon">${a.mime.startsWith('image/') ? '🖼' : '📄'}</div>
+          ${preview}
           <div class="attachment-meta">
             <a href="${url}" target="_blank" rel="noopener">${escapeHtml(a.name)}</a>
             <span>${(a.size / 1024).toFixed(0)} KB</span>
@@ -873,7 +923,7 @@ function renderAttachments(atts) {
     div.className = 'attachment';
     const preview = a.mime.startsWith('image/')
       ? `<img src="${url}" alt="${escapeHtml(a.name)}" loading="lazy">`
-      : `<div class="file-icon">📄</div>`;
+      : `<div class="file-icon">${fileIcon(a.mime, a.name)}</div>`;
     div.innerHTML = `
       ${preview}
       <div class="attachment-meta">
@@ -908,58 +958,178 @@ function bindEditorToolbar(scope) {
   });
 }
 
-$('#cm-save-desc').addEventListener('click', async () => {
+/* ------------------- modal controls (delegated) -------------------
+ * Bound at the document level so they survive any re-render of the
+ * modal internals (live card.updated events re-render the modal body
+ * via refreshCard()).
+ */
+
+async function saveCardDescription() {
   const html = $('#cm-desc').innerHTML;
-  $('#cm-desc-status').textContent = 'saving…';
+  const status = $('#cm-desc-status');
+  status.textContent = 'saving…';
   try {
     await Api.updateCard(State.currentCard.id, { description: html });
-    $('#cm-desc-status').textContent = 'saved ✓';
-    setTimeout(() => { $('#cm-desc-status').textContent = ''; }, 1500);
+    status.textContent = 'saved ✓';
+    setTimeout(() => { status.textContent = ''; }, 1500);
   } catch (e) {
-    $('#cm-desc-status').textContent = 'error';
+    status.textContent = '';
     showBanner(e.message);
   }
-});
+}
 
-$('#cm-title').addEventListener('change', async () => {
-  const title = $('#cm-title').value.trim();
-  if (!title) return;
-  try {
-    await Api.updateCard(State.currentCard.id, { title });
-    State.currentCard.title = title;
-    const col = State.board.columns.find((c) => c.id === State.currentCard.column_id);
-    const card = (col.cards || []).find((c) => c.id === State.currentCard.id);
-    if (card) card.title = title;
-    renderBoard();
-  } catch (e) { showBanner(e.message); }
-});
+function addLabelFlow() {
+  const text = prompt('Label text (optional)');
+  const color = LABEL_COLORS[Math.floor(Math.random() * LABEL_COLORS.length)];
+  Api.addLabel(State.currentCard.id, text || '', color).catch((e) => showBanner(e.message));
+}
 
-$('#cm-due').addEventListener('change', () => {
-  Api.updateCard(State.currentCard.id, { dueDate: $('#cm-due').value || null })
-    .then((r) => { State.currentCard.due_date = r.card.due_date; })
-    .catch((e) => showBanner(e.message));
-});
-
-$('#cm-close').addEventListener('click', () => $('#card-modal').close());
-$('#card-modal').addEventListener('click', (e) => {
-  if (e.target === $('#card-modal')) $('#card-modal').close();
-});
-
-$('#cm-delete').addEventListener('click', async () => {
+async function deleteCardFlow() {
   if (!confirm('Delete this card?')) return;
   try {
     await Api.deleteCard(State.currentCard.id);
     $('#card-modal').close();
     State.currentCard = null;
   } catch (e) { showBanner(e.message); }
+}
+
+document.addEventListener('change', (e) => {
+  const t = e.target;
+  if (!t || !t.id) return;
+  if (t.id === 'cm-title') {
+    const title = t.value.trim();
+    if (!title) return;
+    Api.updateCard(State.currentCard.id, { title })
+      .then((r) => {
+        State.currentCard.title = r.card.title;
+        const col = State.board.columns.find((c) => c.id === State.currentCard.column_id);
+        const card = (col.cards || []).find((c) => c.id === State.currentCard.id);
+        if (card) card.title = r.card.title;
+        renderBoard();
+      })
+      .catch((err) => showBanner(err.message));
+  } else if (t.id === 'cm-due') {
+    Api.updateCard(State.currentCard.id, { dueDate: t.value || null })
+      .then((r) => { State.currentCard.due_date = r.card.due_date; })
+      .catch((err) => showBanner(err.message));
+  } else if (t.id === 'cm-comment-file') {
+    handleCommentAttach(t.files[0]);
+    t.value = '';
+  } else if (t.id === 'cm-attach-file') {
+    handleCardAttach(t.files[0]);
+    t.value = '';
+  }
 });
 
-/* labels */
-$('#cm-add-label').addEventListener('click', () => {
-  const text = prompt('Label text (optional)');
-  const color = LABEL_COLORS[Math.floor(Math.random() * LABEL_COLORS.length)];
-  Api.addLabel(State.currentCard.id, text || '', color).catch((e) => showBanner(e.message));
+document.addEventListener('click', (e) => {
+  const t = e.target && e.target.closest ? e.target.closest('button, a') : null;
+  if (t && t.id) {
+    if (t.id === 'cm-save-desc') { saveCardDescription(); }
+    else if (t.id === 'cm-save-comment') { saveComment(); }
+    else if (t.id === 'cm-close') { $('#card-modal').close(); }
+    else if (t.id === 'cm-delete') { deleteCardFlow(); }
+    else if (t.id === 'cm-comment-attach') { $('#cm-comment-file').click(); }
+    else if (t.id === 'cm-attach-btn') { $('#cm-attach-file').click(); }
+    else if (t.id === 'cm-add-label') { addLabelFlow(); }
+  }
+  if (e.target === $('#card-modal')) $('#card-modal').close();
 });
+
+/* ----------------------- chunked uploader ------------------------- */
+
+const UPLOAD_LIMIT = 5 * 1024 * 1024; // 5 MB (server-side MAX_UPLOAD)
+const UPLOAD_CHUNK_MIN = 64 * 1024;
+const UPLOAD_CHUNK_MAX = 1024 * 1024;
+const UPLOAD_CHUNK_INIT = 256 * 1024;
+
+// Upload in chunks so a single request never hits PHP's per-request
+// upload limits. The chunk size adapts to the measured throughput
+// (each request aims for ~1.2 s); tiny files finish in a single chunk.
+async function uploadChunked(file, onProgress) {
+  if (!file || file.size <= 0) throw new Error('Empty file');
+  if (file.size > UPLOAD_LIMIT) throw new Error('File too large (max 5 MB)');
+  const { fileId } = await Api.uploadStart(file.name, file.size);
+  let chunkSize = UPLOAD_CHUNK_INIT;
+  let sent = 0;
+  let index = 0;
+  try {
+    while (sent < file.size) {
+      const end = Math.min(sent + chunkSize, file.size);
+      const part = file.slice(sent, end);
+      const t0 = performance.now();
+      await Api.uploadChunk(fileId, index++, part);
+      const dt = performance.now() - t0;
+      if (dt > 0) {
+        const bps = part.size / (dt / 1000);
+        chunkSize = Math.max(UPLOAD_CHUNK_MIN, Math.min(UPLOAD_CHUNK_MAX, Math.round(bps * 1.2)));
+      }
+      sent = end;
+      if (onProgress) onProgress(sent / file.size);
+    }
+  } catch (err) {
+    Api.abortUpload(fileId).catch(() => {});
+    throw err;
+  }
+  return { fileId, name: file.name, size: file.size };
+}
+
+/* comment attachments: upload first, attach when the comment is posted */
+let pendingCommentUpload = null; // Promise<{fileId,name,size}> | null
+
+async function handleCommentAttach(file) {
+  if (!file) return;
+  const status = $('#cm-comment-status');
+  status.textContent = `Uploading ${file.name} — 0%`;
+  pendingCommentUpload = (async () => {
+    const up = await uploadChunked(file, (p) => {
+      status.textContent = `Uploading ${file.name} — ${Math.round(p * 100)}%`;
+    });
+    status.textContent = `✓ ${up.name} ready`;
+    return up;
+  })();
+  pendingCommentUpload.catch(() => { status.textContent = ''; });
+}
+
+async function saveComment() {
+  const body = $('#cm-comment-input').innerHTML;
+  const up = pendingCommentUpload ? await pendingCommentUpload.catch(() => null) : null;
+  const emptyBody = !body || !body.replace(/<br>|<div><br><\/div>|\s/g, '');
+  if (emptyBody && !up) return;
+  const btn = $('#cm-save-comment');
+  btn.disabled = true;
+  try {
+    if (up) {
+      await Api.addCommentWithFileId(State.currentCard.id, body, up.fileId);
+    } else {
+      await Api.addComment(State.currentCard.id, body);
+    }
+    $('#cm-comment-input').innerHTML = '';
+    pendingCommentUpload = null;
+    $('#cm-comment-status').textContent = '';
+  } catch (e) {
+    showBanner(e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function handleCardAttach(file) {
+  if (!file) return;
+  const status = $('#cm-attach-status');
+  status.textContent = `Uploading ${file.name} — 0%`;
+  try {
+    const up = await uploadChunked(file, (p) => {
+      status.textContent = `Uploading ${file.name} — ${Math.round(p * 100)}%`;
+    });
+    const att = await Api.attachCardFile(State.currentCard.id, up.fileId);
+    status.textContent = `✓ ${att.name} attached`;
+    setTimeout(() => { status.textContent = ''; }, 1500);
+    await refreshCard(State.currentCard.id);
+  } catch (err) {
+    status.textContent = '';
+    showBanner(err.message);
+  }
+}
 
 /* checklist */
 $('#cm-checklist-form').addEventListener('submit', (e) => {
@@ -968,34 +1138,6 @@ $('#cm-checklist-form').addEventListener('submit', (e) => {
   if (!text) return;
   Api.addChecklistItem(State.currentCard.id, text).catch((err) => showBanner(err.message));
   $('#cm-checklist-input').value = '';
-});
-
-/* comments */
-let pendingCommentFile = null;
-$('#cm-comment-attach').addEventListener('click', () => $('#cm-comment-file').click());
-$('#cm-comment-file').addEventListener('change', (e) => {
-  pendingCommentFile = e.target.files[0] || null;
-});
-$('#cm-save-comment').addEventListener('click', async () => {
-  const body = $('#cm-comment-input').innerHTML;
-  if ((!body || !body.replace(/<br>|<div><br><\/div>|\s/g, '')) && !pendingCommentFile) return;
-  try {
-    await Api.addComment(State.currentCard.id, body, pendingCommentFile);
-    $('#cm-comment-input').innerHTML = '';
-    $('#cm-comment-file').value = '';
-    pendingCommentFile = null;
-  } catch (e) { showBanner(e.message); }
-});
-
-/* attachments */
-$('#cm-attach-btn').addEventListener('click', () => $('#cm-attach-file').click());
-$('#cm-attach-file').addEventListener('change', async (e) => {
-  const file = e.target.files[0];
-  e.target.value = '';
-  if (!file) return;
-  try {
-    await Api.upload(State.currentCard.id, file);
-  } catch (err) { showBanner(err.message); }
 });
 
 bindEditorToolbar(document);

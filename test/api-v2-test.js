@@ -270,6 +270,102 @@ const step = (name, fn) => Promise.resolve().then(fn).then(() => console.log('  
     if (!c.badges || c.badges.checklist !== 1 || c.badges.comments !== 3) throw new Error('badges wrong: ' + JSON.stringify(c.badges));
   });
 
+  const chunkedFile = (buf, name, type) => new File([buf], name, { type });
+
+  await step('chunked upload happy path (3 chunks -> attach via fileId)', async () => {
+    const text = Buffer.alloc(300 * 1024, 0x41); // 300 KB of 'A'
+    const st = await j('POST', '/api/uploads/start', { name: 'chunked.txt', size: text.length });
+    const fileId = st.fileId;
+    if (!/^[a-f0-9]{32}$/.test(fileId || '')) throw new Error('bad fileId: ' + fileId);
+    for (let i = 0; i < 3; i++) {
+      const fd = new FormData();
+      fd.append('fileId', fileId);
+      fd.append('index', String(i));
+      fd.append('chunk', chunkedFile(text.subarray(i * 100 * 1024, (i + 1) * 100 * 1024), 'c' + i, 'application/octet-stream'));
+      const res = await fetch(`${BASE}/api/uploads/chunk`, { method: 'POST', body: fd, headers: { cookie } });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'chunk ' + i + ' failed');
+      if (data.received !== i + 1) throw new Error('received mismatch: ' + data.received);
+    }
+    const att = await j('POST', `/api/cards/${cardId}/attachments`, { fileId });
+    if (!att.attachment || att.attachment.size !== text.length) throw new Error('attach failed: ' + JSON.stringify(att));
+    if (att.attachment.mime !== 'text/plain') throw new Error('mime wrong: ' + att.attachment.mime);
+    try { await j('POST', `/api/cards/${cardId}/attachments`, { fileId }); throw new Error('expected reuse failure'); }
+    catch (e) { if (!/session incomplete/i.test(e.message)) throw e; }
+    await j('DELETE', `/api/attachments/${att.attachment.id}`);
+  });
+
+  await step('chunk out of order -> 409', async () => {
+    const st = await j('POST', '/api/uploads/start', { name: 'oob.txt', size: 200 * 1024 });
+    const fd = new FormData();
+    fd.append('fileId', st.fileId);
+    fd.append('index', '1'); // skip 0
+    fd.append('chunk', chunkedFile(Buffer.alloc(100 * 1024, 0x42), 'c1', 'application/octet-stream'));
+    const res = await fetch(`${BASE}/api/uploads/chunk`, { method: 'POST', body: fd, headers: { cookie } });
+    if (res.status !== 409) throw new Error('expected 409, got ' + res.status);
+    await j('POST', '/api/uploads/abort', { fileId: st.fileId });
+    const st2 = await j('POST', '/api/uploads/start', { name: 'oob2.txt', size: 10 });
+    try { await j('POST', '/api/uploads/abort', { fileId: st2.fileId }); } catch { /* fine */ }
+  });
+
+  await step('chunked upload oversize rejected at start', async () => {
+    const res = await fetch(`${BASE}/api/uploads/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie },
+      body: JSON.stringify({ name: 'huge.bin', size: 5 * 1024 * 1024 + 1 }),
+    });
+    if (res.status !== 422) throw new Error('expected 422, got ' + res.status);
+  });
+
+  await step('chunked upload exceeds limit mid-stream -> 413', async () => {
+    const st = await j('POST', '/api/uploads/start', { name: 'fat.txt', size: 5 * 1024 * 1024 });
+    let got413 = false;
+    for (let i = 0; i < 6; i++) {
+      const fd = new FormData();
+      fd.append('fileId', st.fileId);
+      fd.append('index', String(i));
+      fd.append('chunk', chunkedFile(Buffer.alloc(1024 * 1024, 0x43), 'c', 'application/octet-stream'));
+      const res = await fetch(`${BASE}/api/uploads/chunk`, { method: 'POST', body: fd, headers: { cookie } });
+      if (res.status === 413) { got413 = true; break; }
+      if (!res.ok) throw new Error('chunk ' + i + ' failed: ' + res.status);
+    }
+    if (!got413) throw new Error('expected 413 mid-stream');
+  });
+
+  await step('chunked upload disallowed type rejected at finalize', async () => {
+    const st = await j('POST', '/api/uploads/start', { name: 'tool.exe', size: 100 });
+    const fd = new FormData();
+    fd.append('fileId', st.fileId);
+    fd.append('index', '0');
+    fd.append('chunk', chunkedFile(Buffer.concat([Buffer.from('MZ'), Buffer.alloc(96, 0x13)]), 'c0', 'application/octet-stream'));
+    const up = await fetch(`${BASE}/api/uploads/chunk`, { method: 'POST', body: fd, headers: { cookie } });
+    if (!up.ok) throw new Error('chunk failed: ' + up.status);
+    const res = await fetch(`${BASE}/api/cards/${cardId}/attachments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie },
+      body: JSON.stringify({ fileId: st.fileId }),
+    });
+    if (res.status !== 422) throw new Error('expected 422 at finalize, got ' + res.status);
+    const data = await res.json();
+    if (!/File type not allowed/.test(data.error || '')) throw new Error('wrong error: ' + data.error);
+  });
+
+  await step('comment with chunked upload (body + fileId)', async () => {
+    const st = await j('POST', '/api/uploads/start', { name: 'note.txt', size: 50 });
+    const fd = new FormData();
+    fd.append('fileId', st.fileId);
+    fd.append('index', '0');
+    fd.append('chunk', chunkedFile(Buffer.from('hello chunk world'), 'c0', 'text/plain'));
+    const up = await fetch(`${BASE}/api/uploads/chunk`, { method: 'POST', body: fd, headers: { cookie } });
+    if (!up.ok) throw new Error('chunk failed: ' + up.status);
+    const res = await j('POST', `/api/cards/${cardId}/comments`, { body: '<b>chunked</b> comment', fileId: st.fileId });
+    if (!res.comment || !res.comment.body_html.includes('chunked')) throw new Error('comment missing');
+    if (!res.attachment || res.attachment.name !== 'note.txt' || res.attachment.size !== 17) {
+      throw new Error('attachment wrong: ' + JSON.stringify(res.attachment));
+    }
+    await j('DELETE', `/api/comments/${res.comment.id}`);
+  });
+
   await step('other user cannot access board (404)', async () => {
     const r2 = await fetch(`${BASE}/api/auth/register`, {
       method: 'POST',

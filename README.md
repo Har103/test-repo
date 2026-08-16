@@ -142,6 +142,12 @@ Then log in, open a board, open a **second tab**, and watch it sync.
 - **Attachments**: image previews (PNG/JPEG/GIF/WebP) + PDF/txt/json,
   documents and archives (doc/docx/xls/xlsx/ppt/pptx/rtf/zip/rar/7z/gz/tar/csv),
   5 MB cap, MIME sniffed with `finfo`
+- **Chunked uploader with live status**: files stream in chunks (sized
+  dynamically from measured throughput, ~1.2 s per request, so no request
+  ever hits PHP's `upload_max_filesize`) with a `Uploading name — 42%`
+  progress indicator, `✓ name ready` confirmation for comments, and a
+  `✓ name attached` confirmation for cards; oversized/interleaved chunks
+  and disallowed types are rejected server-side
 - **Dark mode**: ☾/☀ toggle in the topbar, persisted per browser
   (`localStorage`), applied before first paint (no flash)
 - **Card search**: `Filter cards…` box in the board toolbar — client-side,

@@ -230,6 +230,26 @@ const poll = async (fn, timeout = 10000, interval = 250) => {
     c.querySelector('.comment-attachments .attachment-meta a')?.textContent === 'e2e-bundle.zip')`), 8000));
   const zipHref = await evalJs(`([...document.querySelectorAll('.comment-attachments .attachment-meta a')].map(a => a.href).find(h => h.endsWith('.zip')) || '')`);
   ok('comment attachment served over HTTP', zipHref !== '' && (await httpGet(zipHref).then(() => true).catch(() => false)));
+  ok('comment zip shows type icon', await evalJs(`[...document.querySelectorAll('.comment-attachments .file-icon svg text')].some(t => t.textContent === 'ZIP')`));
+
+  // comment with a picture -> inline preview, not just an icon
+  const pngPath2 = path.join(__dirname, 'e2e-pixel2.png');
+  fs.writeFileSync(pngPath2, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'));
+  const { result: docRes2 } = await cdpCall(ws, 106, 'DOM.getDocument', { depth: -1 });
+  const cfNode2 = await cdpCall(ws, 107, 'DOM.querySelector', { nodeId: docRes2.root.nodeId, selector: '#cm-comment-file' });
+  await cdpCall(ws, 108, 'DOM.setFileInputFiles', { nodeId: cfNode2.result.nodeId, files: [pngPath2] });
+  ok('comment upload shows status', await poll(() => evalJs(`(() => {
+    const s = document.getElementById('cm-comment-status').textContent;
+    return s.includes('%') || s.includes('ready');
+  })()`), 8000));
+  await evalJs(`document.getElementById('cm-comment-input').innerHTML = 'picture comment'; true`);
+  await evalJs(`document.getElementById('cm-save-comment').click(); true`);
+  ok('comment with picture posts', await poll(() => evalJs(`[...document.querySelectorAll('.comment')].some(c => (c.querySelector('.comment-body')?.textContent || '').includes('picture comment'))`), 8000));
+  ok('comment picture shows inline preview', await poll(() => evalJs(`(() => {
+    const img = [...document.querySelectorAll('.comment-attachments img')].pop();
+    return img && img.src.includes('/uploads/') && img.complete;
+  })()`), 8000));
+  fs.unlinkSync(pngPath2);
 
   // XSS payload through the real UI: must render as inert text, never execute
   await evalJs(`document.getElementById('cm-comment-input').innerHTML = '<title><script>window.__xss=1</script></title><form><input autofocus onfocus="window.__xss=2"></form><a href="javascript:window.__xss=3">badlink</a>'; true`);
@@ -262,11 +282,15 @@ const poll = async (fn, timeout = 10000, interval = 250) => {
   await evalJs(`document.getElementById('cm-add-label').click(); true`);
   ok('label chip appears', await poll(() => evalJs(`[...document.querySelectorAll('#cm-labels .lbl')].some(el => el.textContent === 'bug')`)));
 
-  // due date
-  await evalJs(`(() => { const el = document.getElementById('cm-due'); el.value = '2026-12-31'; el.dispatchEvent(new Event('change', {bubbles:true})); return true; })()`);
-  await sleep(600);
+  // due date (badge appears via the live event pipeline -> poll)
+  await evalJs(`(() => {
+    const el = document.getElementById('cm-due');
+    el.value = '2026-12-31';
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  })()`);
+  ok('due date badge on card', await poll(() => evalJs(`[...document.querySelectorAll('.badge')].some(el => el.textContent.includes('2026-12-31'))`), 8000));
   await evalJs(`document.getElementById('card-modal').close(); true`);
-  ok('due date badge on card', (await evalJs(`[...document.querySelectorAll('.badge')].some(el => el.textContent.includes('2026-12-31'))`)));
 
   // ------------------------ card search filter ----------------------
   await evalJs(`window.prompt = () => 'Alpha Special'; true`);
@@ -293,15 +317,16 @@ const poll = async (fn, timeout = 10000, interval = 250) => {
 
   // description with rich toolbar
   await evalJs(`document.querySelector('.card').click(); true`);
-  await sleep(400);
+  await poll(() => evalJs(`document.getElementById('card-modal').open`), 8000);
   await evalJs(`document.getElementById('cm-desc').innerHTML = '<p>rich <b>desc</b></p>'; true`);
   await evalJs(`document.getElementById('cm-save-desc').click(); true`);
   ok('description saved', await poll(() => evalJs(`document.getElementById('cm-desc').innerHTML.includes('rich <b>desc</b>')`)));
-  await sleep(600);
   const snapshot = await api('GET', `/api/boards/${testBoardId}`);
   const cardId = snapshot.columns[0].cards[0].id;
-  const detail = await api('GET', `/api/cards/${cardId}`);
-  ok('description stored sanitized', /<p>rich <b>desc<\/b><\/p>/.test(detail.card.description_html));
+  ok('description stored sanitized', await poll(async () => {
+    const detail = await api('GET', `/api/cards/${cardId}`);
+    return /<p>rich <b>desc<\/b><\/p>/.test(detail.card.description_html);
+  }, 8000));
 
   // attachment upload via DOM.setFileInputFiles
   const pngPath = path.join(__dirname, 'e2e-pixel.png');
@@ -309,11 +334,20 @@ const poll = async (fn, timeout = 10000, interval = 250) => {
   const { result } = await cdpCall(ws, 99, 'DOM.getDocument', { depth: -1 });
   const nodeId = await cdpCall(ws, 100, 'DOM.querySelector', { nodeId: result.root.nodeId, selector: '#cm-attach-file' });
   await cdpCall(ws, 101, 'DOM.setFileInputFiles', { nodeId: nodeId.result.nodeId, files: [pngPath] });
+  ok('card upload shows status', await poll(() => evalJs(`(() => {
+    const s = document.getElementById('cm-attach-status').textContent;
+    return s.includes('%') || s.includes('attached');
+  })()`), 8000));
   ok('attachment uploaded + preview', await poll(() => evalJs(`document.querySelectorAll('#cm-attachments .attachment img').length >= 1`), 8000));
   fs.unlinkSync(pngPath);
   const cardZipNode = await cdpCall(ws, 104, 'DOM.querySelector', { nodeId: result.root.nodeId, selector: '#cm-attach-file' });
   await cdpCall(ws, 105, 'DOM.setFileInputFiles', { nodeId: cardZipNode.result.nodeId, files: [zipPath] });
   ok('zip document attachment on card', await poll(() => evalJs(`[...document.querySelectorAll('#cm-attachments .attachment-meta a')].some(a => a.textContent === 'e2e-bundle.zip')`), 8000));
+  ok('card zip shows type icon (no emoji)', await evalJs(`(() => {
+    const icons = document.querySelectorAll('#cm-attachments .file-icon');
+    return icons.length >= 1 && [...document.querySelectorAll('#cm-attachments .file-icon svg text')].some(t => t.textContent === 'ZIP')
+      && ![...document.querySelectorAll('#cm-attachments .file-icon')].some(el => el.textContent.includes('📄'));
+  })()`));
   fs.unlinkSync(zipPath);
   await evalJs(`document.getElementById('card-modal').close(); true`);
 

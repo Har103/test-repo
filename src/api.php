@@ -167,6 +167,41 @@ function api_dispatch(): void
         }
     }
 
+    /* ----------------------------- uploads --------------------------- */
+
+    if ($seg[0] === 'api' && $seg[1] === 'uploads') {
+        $action = $seg[2] ?? '';
+        if ($method === 'POST' && $action === 'start') {
+            guard_mutation();
+            $data = body();
+            $name = opt_str($data, 'name', '', 200);
+            if ($name === '') {
+                send_error("Missing or empty 'name'");
+            }
+            $fileId = start_chunked_upload($name, max(0, (int) ($data['size'] ?? 0)));
+            send_json(['ok' => true, 'fileId' => $fileId, 'maxSize' => MAX_UPLOAD]);
+        }
+        if ($method === 'POST' && $action === 'chunk') {
+            guard_mutation();
+            $chunk = $_FILES['chunk'] ?? null;
+            if (!is_array($chunk)) {
+                send_error('Missing chunk field', 422);
+            }
+            $fileId = (string) ($_POST['fileId'] ?? '');
+            $index = (int) ($_POST['index'] ?? -1);
+            $res = append_chunk($fileId, $index, $chunk);
+            send_json(['ok' => true] + $res);
+        }
+        if ($method === 'POST' && $action === 'abort') {
+            guard_mutation();
+            $fileId = (string) (body()['fileId'] ?? '');
+            if (valid_file_id($fileId)) {
+                upload_tmp_cleanup($fileId);
+            }
+            send_json(['ok' => true]);
+        }
+    }
+
     /* ----------------------------- cards --------------------------- */
 
     if (($seg[0] ?? '') === 'api' && ($seg[1] ?? '') === 'cards' && isset($seg[2])) {
@@ -247,6 +282,26 @@ function api_dispatch(): void
                 }
                 send_error('Comment empty or card not found', 422);
             }
+            // chunked uploads: the file was streamed beforehand, only the
+            // session id is sent along with the comment text
+            $fileId = isset($_POST['fileId']) ? (string) $_POST['fileId'] : (string) opt_str($data, 'fileId', '', 64);
+            if ($fileId !== '') {
+                $fin = finalize_chunked_upload($fileId);
+                if ($fin === null) {
+                    send_error('Upload session incomplete', 422);
+                }
+                $comment = add_comment($cardId, $userId, $bodyHtml);
+                if (!$comment) {
+                    @unlink(upload_dir() . '/' . $fin['stored']);
+                    send_error('Comment empty or card not found', 422);
+                }
+                $att = insert_attachment($cardId, $userId, (int) $comment['id'], $fin);
+                record_event('comment.created', $boardId, ['comment' => $comment]);
+                if ($att) {
+                    record_event('attachment.created', $boardId, ['attachment' => $att]);
+                }
+                send_json(['ok' => true, 'comment' => $comment, 'attachment' => $att], 201);
+            }
             $comment = add_comment($cardId, $userId, $bodyHtml);
             if ($comment) {
                 record_event('comment.created', $boardId, ['comment' => $comment]);
@@ -257,8 +312,20 @@ function api_dispatch(): void
         if ($method === 'POST' && $action === 'attachments') {
             guard_mutation();
             $file = $_FILES['file'] ?? null;
-            if (!is_array($file)) { send_error('Missing file field', 422); }
-            $att = store_attachment($cardId, $userId, $file);
+            if (is_array($file)) {
+                $att = store_attachment($cardId, $userId, $file);
+            } else {
+                // chunked upload: only the session id is sent
+                $fileId = (string) opt_str(body(), 'fileId', '', 64);
+                if ($fileId === '') {
+                    send_error('Missing file field', 422);
+                }
+                $fin = finalize_chunked_upload($fileId);
+                if ($fin === null) {
+                    send_error('Upload session incomplete', 422);
+                }
+                $att = insert_attachment($cardId, $userId, null, $fin);
+            }
             if ($att) {
                 record_event('attachment.created', $boardId, ['attachment' => $att]);
                 send_json(['ok' => true, 'attachment' => $att], 201);

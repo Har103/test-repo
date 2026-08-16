@@ -581,13 +581,178 @@ function store_attachment(int $cardId, int $userId, array $file, ?int $commentId
         send_error('Could not store file', 500);
     }
 
+    return insert_attachment($cardId, $userId, $commentId, [
+        'name' => mb_substr(basename($file['name']), 0, 200),
+        'stored' => $stored,
+        'mime' => $mime,
+        'size' => (int) $file['size'],
+    ]);
+}
+
+/* --------------------- chunked uploads ---------------------------- */
+// Files are uploaded in chunks to a temp area outside the web root;
+// each request stays small so PHP's per-request upload limits never
+// apply. The client creates a session (start), streams chunks (chunk,
+// strictly sequential) and the attach endpoints finalize the file.
+
+const UPLOAD_TMP_DIR = __DIR__ . '/../tmp-uploads';
+const UPLOAD_TMP_TTL = 3600; // seconds
+
+function upload_tmp_dir(): string
+{
+    $dir = UPLOAD_TMP_DIR;
+    if (!is_dir($dir)) {
+        mkdir($dir, 0777, true);
+    }
+    return $dir;
+}
+
+function upload_tmp_path(string $fileId, string $suffix): string
+{
+    return upload_tmp_dir() . '/' . $fileId . $suffix;
+}
+
+function valid_file_id(string $fileId): bool
+{
+    return preg_match('/^[a-f0-9]{16,64}$/', $fileId) === 1;
+}
+
+function upload_tmp_meta(string $fileId): ?array
+{
+    $p = upload_tmp_path($fileId, '.json');
+    if (!is_file($p)) {
+        return null;
+    }
+    $m = json_decode((string) file_get_contents($p), true);
+    return is_array($m) ? $m : null;
+}
+
+function upload_tmp_cleanup(string $fileId): void
+{
+    @unlink(upload_tmp_path($fileId, '.bin'));
+    @unlink(upload_tmp_path($fileId, '.json'));
+}
+
+function upload_tmp_sweep(): void
+{
+    $dir = upload_tmp_dir();
+    $now = time();
+    foreach (glob($dir . '/*') ?: [] as $f) {
+        if (is_file($f) && $now - (int) filemtime($f) > UPLOAD_TMP_TTL) {
+            @unlink($f);
+        }
+    }
+}
+
+function start_chunked_upload(string $name, int $size): string
+{
+    upload_tmp_sweep();
+    if ($size <= 0) {
+        send_error('Empty file', 422);
+    }
+    if ($size > MAX_UPLOAD) {
+        send_error('File too large (max 5 MB)', 422);
+    }
+    $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
+    $extMime = EXT_MIME[$ext] ?? null;
+    if ($extMime !== null && !isset(MIME_EXT[$extMime])) {
+        send_error('File type not allowed (images, documents, archives)', 422);
+    }
+    $fileId = bin2hex(random_bytes(16));
+    $meta = [
+        'name' => mb_substr(basename($name), 0, 200),
+        'size' => $size,
+        'received' => 0,
+        'bytes' => 0,
+    ];
+    file_put_contents(upload_tmp_path($fileId, '.json'), json_encode($meta));
+    return $fileId;
+}
+
+function append_chunk(string $fileId, int $index, array $file): array
+{
+    if (!valid_file_id($fileId)) {
+        send_error('Invalid file id', 422);
+    }
+    $meta = upload_tmp_meta($fileId);
+    if ($meta === null) {
+        send_error('Upload session not found', 404);
+    }
+    if ($file['error'] !== UPLOAD_ERR_OK || $file['size'] <= 0 || !is_uploaded_file($file['tmp_name'])) {
+        send_error('Bad chunk', 422);
+    }
+    if ($index !== (int) $meta['received']) {
+        send_error('Chunk out of order', 409);
+    }
+    $bytes = (int) $file['size'];
+    if ($meta['bytes'] + $bytes > MAX_UPLOAD) {
+        upload_tmp_cleanup($fileId);
+        send_error('File too large (max 5 MB)', 413);
+    }
+    $fp = fopen(upload_tmp_path($fileId, '.bin'), 'ab');
+    if ($fp === false) {
+        send_error('Could not store chunk', 500);
+    }
+    fwrite($fp, (string) file_get_contents($file['tmp_name']));
+    fclose($fp);
+    $meta['received']++;
+    $meta['bytes'] += $bytes;
+    file_put_contents(upload_tmp_path($fileId, '.json'), json_encode($meta));
+    return ['received' => $meta['received']];
+}
+
+// Assemble a chunked upload into a final stored file (same validation
+// as store_attachment) and return the file descriptor for the caller
+// to attach. The session is deleted either way.
+function finalize_chunked_upload(string $fileId): ?array
+{
+    if (!valid_file_id($fileId)) {
+        send_error('Invalid file id', 422);
+    }
+    $meta = upload_tmp_meta($fileId);
+    $bin = upload_tmp_path($fileId, '.bin');
+    if ($meta === null || !is_file($bin) || $meta['bytes'] <= 0 || $meta['bytes'] > MAX_UPLOAD) {
+        if ($meta !== null) {
+            upload_tmp_cleanup($fileId);
+        }
+        send_error('Upload session incomplete', 422);
+    }
+
+    $finfo = function_exists('finfo_open') ? finfo_open(FILEINFO_MIME_TYPE) : false;
+    $mime = $finfo ? (string) finfo_file($finfo, $bin) : 'application/octet-stream';
+    if ($finfo) {
+        finfo_close($finfo);
+    }
+
+    // fileinfo reports OOXML (docx/xlsx/pptx) as application/zip on some
+    // builds; trust the original extension to pick the right MIME then.
+    $ext = strtolower(pathinfo($meta['name'], PATHINFO_EXTENSION));
+    $extMime = EXT_MIME[$ext] ?? null;
+    if ($extMime !== null && in_array($mime, ['application/zip', 'application/octet-stream'], true)) {
+        $mime = $extMime;
+    }
+    if (!isset(MIME_EXT[$mime])) {
+        upload_tmp_cleanup($fileId);
+        send_error('File type not allowed (images, documents, archives)', 422);
+    }
+
+    ensure_upload_dir();
+    $stored = bin2hex(random_bytes(16)) . '.' . MIME_EXT[$mime];
+    if (!rename($bin, upload_dir() . '/' . $stored)) {
+        upload_tmp_cleanup($fileId);
+        send_error('Could not store file', 500);
+    }
+    upload_tmp_cleanup($fileId);
+    return ['name' => $meta['name'], 'stored' => $stored, 'mime' => $mime, 'size' => $meta['bytes']];
+}
+
+function insert_attachment(int $cardId, int $userId, ?int $commentId, array $fin): ?array
+{
     $stmt = db()->prepare('INSERT INTO attachments (card_id, comment_id, user_id, name, stored, mime, size) VALUES (?, ?, ?, ?, ?, ?, ?)');
     $stmt->execute([
         $cardId, $commentId, $userId,
-        mb_substr(basename($file['name']), 0, 200),
-        $stored, $mime, (int) $file['size'],
+        $fin['name'], $fin['stored'], $fin['mime'], (int) $fin['size'],
     ]);
-
     $s = db()->prepare('SELECT * FROM attachments WHERE id = ?');
     $s->execute([db()->lastInsertId()]);
     return $s->fetch() ?: null;

@@ -26,7 +26,7 @@ echo <<<HTML
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Dockup · Boards</title>
-<link rel="stylesheet" href="{$base}/assets/style.css?v=20260816c">
+<link rel="stylesheet" href="{$base}/assets/style.css?v=20260816e">
 <link rel="icon" href="data:,">
 </head>
 <body>
@@ -160,7 +160,7 @@ echo <<<HTML
           </section>
 
           <section class="cm-section">
-            <h3>Comments</h3>
+            <h3>Comments <span id="cm-comment-status" class="up-status"></span></h3>
             <div id="cm-comments" class="comments"></div>
             <div class="editor-toolbar">
               <button data-cmd="bold"><b>B</b></button>
@@ -196,7 +196,7 @@ echo <<<HTML
           </section>
 
           <section class="cm-section">
-            <h3>Attachments</h3>
+            <h3>Attachments <span id="cm-attach-status" class="up-status"></span></h3>
             <div id="cm-attachments" class="cm-attachments"></div>
           </section>
 
@@ -244,7 +244,7 @@ echo <<<HTML
 
 </div>
 
-<script src="{$base}/assets/app.js?v=20260816c"></script>
+<script src="{$base}/assets/app.js?v=20260816e"></script>
 </body>
 </html>
 HTML;
