@@ -304,8 +304,6 @@ const step = (name, fn) => Promise.resolve().then(fn).then(() => console.log('  
     const res = await fetch(`${BASE}/api/uploads/chunk`, { method: 'POST', body: fd, headers: { cookie } });
     if (res.status !== 409) throw new Error('expected 409, got ' + res.status);
     await j('POST', '/api/uploads/abort', { fileId: st.fileId });
-    const st2 = await j('POST', '/api/uploads/start', { name: 'oob2.txt', size: 10 });
-    try { await j('POST', '/api/uploads/abort', { fileId: st2.fileId }); } catch { /* fine */ }
   });
 
   await step('chunked upload oversize rejected at start', async () => {
@@ -332,12 +330,25 @@ const step = (name, fn) => Promise.resolve().then(fn).then(() => console.log('  
     if (!got413) throw new Error('expected 413 mid-stream');
   });
 
-  await step('chunked upload disallowed type rejected at finalize', async () => {
-    const st = await j('POST', '/api/uploads/start', { name: 'tool.exe', size: 100 });
+  await step('chunked upload executable name rejected at start', async () => {
+    const res = await fetch(`${BASE}/api/uploads/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie },
+      body: JSON.stringify({ name: 'tool.exe', size: 100 }),
+    });
+    if (res.status !== 422) throw new Error('expected 422 at start, got ' + res.status);
+    const data = await res.json();
+    if (!/File type not allowed/.test(data.error || '')) throw new Error('wrong error: ' + data.error);
+  });
+
+  await step('chunked upload script content rejected at finalize', async () => {
+    // content finfo positively identifies (text/html) smuggled under an
+    // innocent extension: the extension fallback must not rescue it
+    const st = await j('POST', '/api/uploads/start', { name: 'innocent.png', size: 100 });
     const fd = new FormData();
     fd.append('fileId', st.fileId);
     fd.append('index', '0');
-    fd.append('chunk', chunkedFile(Buffer.concat([Buffer.from('MZ'), Buffer.alloc(96, 0x13)]), 'c0', 'application/octet-stream'));
+    fd.append('chunk', chunkedFile(Buffer.from('<html><script>alert(1)</script></html>'), 'c0', 'application/octet-stream'));
     const up = await fetch(`${BASE}/api/uploads/chunk`, { method: 'POST', body: fd, headers: { cookie } });
     if (!up.ok) throw new Error('chunk failed: ' + up.status);
     const res = await fetch(`${BASE}/api/cards/${cardId}/attachments`, {

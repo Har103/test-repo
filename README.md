@@ -231,6 +231,11 @@ curl -X POST http://localhost/api/cards/1/checklist   -H "Content-Type: applicat
 curl -X POST http://localhost/api/cards/1/labels      -H "Content-Type: application/json" -d '{"text":"bug","color":"#ef4444"}'
 curl -X POST http://localhost/api/cards/1/attachments -F "file=@pixel.png"
 
+# chunked upload (streams in pieces; finalize by attaching the session id)
+curl -X POST http://localhost/api/uploads/start  -H "Content-Type: application/json" -d '{"name":"big.txt","size":1048576}'   # -> {"fileId":"..."}
+curl -X POST http://localhost/api/uploads/chunk  -F "fileId=..." -F "index=0" -F "chunk=@part1.bin"
+curl -X POST http://localhost/api/cards/1/attachments -H "Content-Type: application/json" -d '{"fileId":"..."}'
+
 # realtime
 curl -N "http://localhost/api/events?board=1"   # SSE stream (authenticated)
 ```

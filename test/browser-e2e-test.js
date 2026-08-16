@@ -349,6 +349,22 @@ const poll = async (fn, timeout = 10000, interval = 250) => {
       && ![...document.querySelectorAll('#cm-attachments .file-icon')].some(el => el.textContent.includes('📄'));
   })()`));
   fs.unlinkSync(zipPath);
+
+  // multi-chunk upload through the browser: > initial chunk size (256 KB)
+  // so the client exercises its throughput-adaptive chunking path
+  const chunkPath = path.join(__dirname, 'chunky.txt');
+  fs.writeFileSync(chunkPath, Buffer.alloc(600 * 1024, 0x41));
+  const { result: docRes3 } = await cdpCall(ws, 109, 'DOM.getDocument', { depth: -1 });
+  const chunkyNode = await cdpCall(ws, 110, 'DOM.querySelector', { nodeId: docRes3.root.nodeId, selector: '#cm-attach-file' });
+  await cdpCall(ws, 111, 'DOM.setFileInputFiles', { nodeId: chunkyNode.result.nodeId, files: [chunkPath] });
+  ok('multi-chunk upload shows progress', await poll(() => evalJs(`document.getElementById('cm-attach-status').textContent.includes('%')`), 8000));
+  ok('multi-chunk upload lands intact', await poll(() => evalJs(`(() => {
+    const box = document.getElementById('cm-attachments');
+    const a = [...box.querySelectorAll('.attachment-meta a')].find(x => x.textContent === 'chunky.txt');
+    const kb = a && a.closest('.attachment-meta').querySelector('span').textContent;
+    return a && kb === '600 KB';
+  })()`), 8000));
+  fs.unlinkSync(chunkPath);
   await evalJs(`document.getElementById('card-modal').close(); true`);
 
   // --------------------- second tab realtime ----------------------

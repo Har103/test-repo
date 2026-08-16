@@ -505,6 +505,16 @@ const MIME_EXT = [
     'application/x-7z-compressed' => '7z',
 ];
 
+// Executable / script extensions refused at upload start (defense-in-depth;
+// finalize still sniffs the real content with finfo).
+const DENY_EXT = [
+    'exe' => true, 'bat' => true, 'cmd' => true, 'com' => true, 'scr' => true,
+    'msi' => true, 'dll' => true, 'sys' => true, 'cpl' => true, 'jar' => true,
+    'js' => true, 'mjs' => true, 'php' => true, 'phtml' => true, 'phar' => true,
+    'html' => true, 'htm' => true, 'svg' => true, 'sh' => true, 'ps1' => true,
+    'vbs' => true, 'jsp' => true, 'asp' => true, 'aspx' => true, 'wasm' => true,
+];
+
 const EXT_MIME = [
     'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png',
     'gif' => 'image/gif', 'webp' => 'image/webp',
@@ -653,7 +663,13 @@ function start_chunked_upload(string $name, int $size): string
     if ($size > MAX_UPLOAD) {
         send_error('File too large (max 5 MB)', 422);
     }
+    // Early defense-in-depth: executable/script extensions are refused
+    // before any chunk is streamed. The authoritative gate stays the
+    // finalize step, which sniffs the assembled bytes with finfo.
     $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
+    if (isset(DENY_EXT[$ext])) {
+        send_error('File type not allowed (images, documents, archives)', 422);
+    }
     $extMime = EXT_MIME[$ext] ?? null;
     if ($extMime !== null && !isset(MIME_EXT[$extMime])) {
         send_error('File type not allowed (images, documents, archives)', 422);
